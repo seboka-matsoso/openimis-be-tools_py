@@ -1,25 +1,28 @@
+import os
 from core.utils import filter_validity
+from django.core.exceptions import PermissionDenied
 from django.db.models.query_utils import Q
-from rest_framework.decorators import authentication_classes, renderer_classes
+from django.http.response import FileResponse, HttpResponse, JsonResponse
+from django.views.decorators.http import require_http_methods
+from rest_framework.decorators import renderer_classes
 from rest_framework.views import APIView
+from django.utils.translation import gettext as _
+from django.shortcuts import get_object_or_404
+
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import parsers
 from . import serializers
-from rest_framework.authentication import SessionAuthentication, BasicAuthentication
 from rest_framework.response import Response
 from location.models import Location, HealthFacility
 from medical.models import Diagnosis
+from core.models import Officer
 import xml.etree.ElementTree as ET
 import logging
 from . import services
 from .apps import ToolsConfig
+from . import utils
 
 logger = logging.getLogger(__name__)
-
-
-class CsrfExemptSessionAuthentication(SessionAuthentication):
-    def enforce_csrf(self, request):
-        return  # To not perform the csrf check previously happening
 
 
 def checkUserWithRights(rights):
@@ -33,7 +36,6 @@ def checkUserWithRights(rights):
 
 
 class LocationsAPIView(APIView):
-    authentication_classes = [BasicAuthentication, CsrfExemptSessionAuthentication]
     permission_classes = [
         checkUserWithRights(
             ToolsConfig.registers_locations_perms,
@@ -75,7 +77,7 @@ class LocationsAPIView(APIView):
             logger.info(
                 f"Uploading locations (dry_run={dry_run}, strategy={strategy})..."
             )
-            xml = ET.parse(file)
+            xml = utils.sanitize_xml(file)
             result = services.upload_locations(
                 request.user, xml=xml, strategy=strategy, dry_run=dry_run
             )
@@ -92,10 +94,7 @@ class LocationsAPIView(APIView):
                 }
             )
         except services.InvalidXMLError as exc:
-            return Response({
-                "success": False,
-                "error": str(exc)
-            })
+            return Response({"success": False, "error": str(exc)})
         except ET.ParseError as exc:
             logger.error(exc)
             return Response(
@@ -107,7 +106,6 @@ class LocationsAPIView(APIView):
 
 
 class HealthFacilitiesAPIView(APIView):
-    authentication_classes = [BasicAuthentication, CsrfExemptSessionAuthentication]
     permission_classes = [
         checkUserWithRights(
             ToolsConfig.registers_health_facilities_perms,
@@ -142,7 +140,7 @@ class HealthFacilitiesAPIView(APIView):
             logger.info(
                 f"Uploading health facilities (dry_run={dry_run}, strategy={strategy})..."
             )
-            xml = ET.parse(file)
+            xml = utils.sanitize_xml(file)
             result = services.upload_health_facilities(
                 request.user, xml=xml, strategy=strategy, dry_run=dry_run
             )
@@ -169,7 +167,6 @@ class HealthFacilitiesAPIView(APIView):
 
 
 class DiagnosesAPIView(APIView):
-    authentication_classes = [BasicAuthentication, CsrfExemptSessionAuthentication]
     permission_classes = [
         checkUserWithRights(
             ToolsConfig.registers_diagnoses_perms,
@@ -199,7 +196,7 @@ class DiagnosesAPIView(APIView):
             logger.info(
                 f"Uploading diagnoses (dry_run={dry_run}, strategy={strategy})..."
             )
-            xml = ET.parse(file)
+            xml = utils.sanitize_xml(file)
             result = services.upload_diagnoses(
                 request.user, xml=xml, strategy=strategy, dry_run=dry_run
             )
@@ -224,3 +221,100 @@ class DiagnosesAPIView(APIView):
                     "error": "Malformed XML",
                 }
             )
+
+
+def download_master_data(request):
+    if not request.user.has_perms(ToolsConfig.extracts_master_data_perms):
+        raise PermissionDenied(_("unauthorized"))
+
+    export_file = services.create_master_data_export(request.user)
+
+    response = FileResponse(
+        open(export_file.name, "rb"),
+        as_attachment=True,
+        filename=os.path.basename(export_file.name),
+        content_type="application/zip",
+    )
+    return response
+
+
+def download_phone_extract(request):
+    if not request.user.has_perms(ToolsConfig.extracts_phone_extract_perms):
+        raise PermissionDenied(_("unauthorized"))
+
+    location_id = request.GET.get("location")
+    with_insuree = request.GET.get("with_insuree", False)
+
+    if not location_id:
+        return Response(status=400, data={"error": "Location must be provided."})
+
+    extract = services.create_phone_extract(request.user, location_id, with_insuree)
+
+    return FileResponse(
+        extract.stored_file,
+        as_attachment=True,
+        filename=os.path.basename(extract.stored_file.name),
+    )
+
+
+def download_feedbacks(request):
+    if not request.user.has_perms(ToolsConfig.extracts_officer_feedbacks_perms):
+        raise PermissionDenied(_("unauthorized"))
+
+    officer_code = request.GET.get("officer")
+    officer = get_object_or_404(Officer, code__iexact=officer_code, *filter_validity())
+
+    export_file = services.create_officer_feedbacks_export(request.user, officer)
+
+    response = FileResponse(
+        open(export_file.name, "rb"),
+        as_attachment=True,
+        filename=os.path.basename(export_file.name),
+        content_type="application/zip",
+    )
+
+    return response
+
+
+def download_renewals(request):
+    if not request.user.has_perms(ToolsConfig.extracts_officer_renewals_perms):
+        raise PermissionDenied(_("unauthorized"))
+
+    officer_code = request.GET.get("officer")
+    officer = get_object_or_404(Officer, code__iexact=officer_code, *filter_validity())
+
+    export_file = services.create_officer_renewals_export(request.user, officer)
+    response = FileResponse(
+        open(export_file.name, "rb"),
+        as_attachment=True,
+        filename=os.path.basename(export_file.name),
+        content_type="application/zip",
+    )
+
+    return response
+
+
+@require_http_methods(["POST"])
+def upload_claims(request):
+    if not request.user.has_perms(ToolsConfig.extracts_upload_claims_perms):
+        raise PermissionDenied(_("unauthorized"))
+
+    if not request.FILES:
+        return JsonResponse({"error": "No file provided"}, status=400)
+
+    errors = []
+    for filename in request.FILES:
+        try:
+            logger.info(f"Processing claim in {filename}")
+            xml = utils.sanitize_xml(request.FILES[filename])
+            services.upload_claim(request.user, xml)
+        except (utils.ParseError, services.InvalidXMLError) as exc:
+            logger.exception(exc)
+            errors.append(f"File '{filename}' is not a valid XML")
+            continue
+        except Exception as exc:
+            logger.exception(exc)
+            errors.append("An unknown error occured.")
+            continue
+
+    return JsonResponse({"success": True, "errors": errors})

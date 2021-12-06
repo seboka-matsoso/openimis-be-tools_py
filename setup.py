@@ -23,6 +23,9 @@ setup(
         "django-db-signals",
         "djangorestframework",
         "djangorestframework-xml",
+        "simplejson",
+        "pyminizip",
+        "defusedxml",
     ],
     classifiers=[
         "Environment :: Web Environment",
