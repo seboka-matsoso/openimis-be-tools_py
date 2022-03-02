@@ -317,4 +317,4 @@ def upload_claims(request):
             errors.append("An unknown error occured.")
             continue
 
-    return JsonResponse({"success": True, "errors": errors})
+    return JsonResponse({"success": len(errors) == 0, "errors": errors})
