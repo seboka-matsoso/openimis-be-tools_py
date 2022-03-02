@@ -1,26 +1,24 @@
+import logging
 import os
+import xml.etree.ElementTree as ET
+
+from core.models import Officer
 from core.utils import filter_validity
 from django.core.exceptions import PermissionDenied
 from django.db.models.query_utils import Q
-from django.http.response import FileResponse, HttpResponse, JsonResponse
-from django.views.decorators.http import require_http_methods
-from rest_framework.decorators import renderer_classes
-from rest_framework.views import APIView
-from django.utils.translation import gettext as _
+from django.http.response import FileResponse, JsonResponse
 from django.shortcuts import get_object_or_404
-
-from rest_framework.permissions import IsAuthenticated
-from rest_framework import parsers
-from . import serializers
-from rest_framework.response import Response
-from location.models import Location, HealthFacility
+from django.utils.translation import gettext as _
+from django.views.decorators.http import require_http_methods
+from location.models import HealthFacility, Location
 from medical.models import Diagnosis
-from core.models import Officer
-import xml.etree.ElementTree as ET
-import logging
-from . import services
+from rest_framework.decorators import api_view, permission_classes, renderer_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.renderers import JSONRenderer
+from rest_framework.response import Response
+
+from . import serializers, services, utils
 from .apps import ToolsConfig
-from . import utils
 
 logger = logging.getLogger(__name__)
 
@@ -35,192 +33,212 @@ def checkUserWithRights(rights):
     return UserWithRights
 
 
-class LocationsAPIView(APIView):
-    permission_classes = [
+@api_view(["GET"])
+@permission_classes(
+    [
         checkUserWithRights(
             ToolsConfig.registers_locations_perms,
         )
     ]
+)
+@renderer_classes([serializers.LocationsXMLRenderer])
+def download_locations(request):
+    data = {"Regions": [], "Districts": [], "Villages": [], "Municipalities": []}
 
-    @renderer_classes([serializers.LocationsXMLRenderer])
-    def get(self, request):
-        data = {"Regions": [], "Districts": [], "Villages": [], "Municipalities": []}
+    for region in Location.objects.filter(~Q(code="FR"), type="R", *filter_validity()):
+        data["Regions"].append(serializers.format_location(region))
+        children = Location.objects.children(region.id).filter(validity_to=None)
+        for child in children:
+            if child.type == "D":
+                data["Districts"].append(serializers.format_location(child))
+            elif child.type == "M":
+                data["Municipalities"].append(serializers.format_location(child))
+            elif child.type == "V":
+                data["Villages"].append(serializers.format_location(child))
 
-        for region in Location.objects.filter(
-            ~Q(code="FR"), type="R", *filter_validity()
-        ):
-            data["Regions"].append(serializers.format_location(region))
-            children = Location.objects.children(region.id)
-            for child in children:
-                if child.type == "D":
-                    data["Districts"].append(serializers.format_location(child))
-                elif child.type == "M":
-                    data["Municipalities"].append(serializers.format_location(child))
-                elif child.type == "V":
-                    data["Villages"].append(serializers.format_location(child))
+    return Response(
+        data,
+        content_type="text/xml",
+        headers={"Content-Disposition": "attachment; filename=locations.xml"},
+    )
 
+
+@api_view(["POST"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_locations_perms,
+        )
+    ]
+)
+def upload_locations(request):
+    serializer = serializers.UploadSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    file = serializer.validated_data.get("file")
+    dry_run = serializer.validated_data.get("dry_run")
+    strategy = serializer.validated_data.get("strategy")
+
+    try:
+        logger.info(f"Uploading locations (dry_run={dry_run}, strategy={strategy})...")
+        xml = utils.sanitize_xml(file)
+        result = services.upload_locations(
+            request.user, xml=xml, strategy=strategy, dry_run=dry_run
+        )
+        logger.info(f"Locations upload completed: {result}")
         return Response(
-            data,
-            content_type="text/xml",
-            headers={"Content-Disposition": "attachment; filename=locations.xml"},
+            {
+                "success": True,
+                "data": {
+                    "sent": result.sent,
+                    "created": result.created,
+                    "updated": result.updated,
+                    "errors": result.errors,
+                },
+            }
+        )
+    except services.InvalidXMLError as exc:
+        return Response({"success": False, "error": str(exc)})
+    except ET.ParseError as exc:
+        logger.error(exc)
+        return Response(
+            {
+                "success": False,
+                "error": "Malformed XML",
+            }
         )
 
-    def post(self, request):
-        serializer = serializers.UploadSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
 
-        file = serializer.validated_data.get("file")
-        dry_run = serializer.validated_data.get("dry_run")
-        strategy = serializer.validated_data.get("strategy")
-
-        try:
-            logger.info(
-                f"Uploading locations (dry_run={dry_run}, strategy={strategy})..."
-            )
-            xml = utils.sanitize_xml(file)
-            result = services.upload_locations(
-                request.user, xml=xml, strategy=strategy, dry_run=dry_run
-            )
-            logger.info(f"Locations upload completed: {result}")
-            return Response(
-                {
-                    "success": True,
-                    "data": {
-                        "sent": result.sent,
-                        "created": result.created,
-                        "updated": result.updated,
-                        "errors": result.errors,
-                    },
-                }
-            )
-        except services.InvalidXMLError as exc:
-            return Response({"success": False, "error": str(exc)})
-        except ET.ParseError as exc:
-            logger.error(exc)
-            return Response(
-                {
-                    "success": False,
-                    "error": "Malformed XML",
-                }
-            )
-
-
-class HealthFacilitiesAPIView(APIView):
-    permission_classes = [
+@api_view(["GET"])
+@permission_classes(
+    [
         checkUserWithRights(
             ToolsConfig.registers_health_facilities_perms,
         )
     ]
+)
+@renderer_classes([serializers.HealthFacilitiesXMLRenderer])
+def download_health_facilities(request):
+    queryset = HealthFacility.objects.filter(*filter_validity())
+    data = {
+        "health_facility_details": [
+            serializers.format_health_facility(hf) for hf in queryset
+        ]
+    }
+    return Response(
+        data=data,
+        content_type="text/xml",
+        headers={"Content-Disposition": "attachment; filename=health_facilities.xml"},
+    )
 
-    @renderer_classes([serializers.HealthFacilitiesXMLRenderer])
-    def get(self, request):
-        queryset = HealthFacility.objects.filter(*filter_validity())
-        data = {
-            "health_facility_details": [
-                serializers.format_health_facility(hf) for hf in queryset
-            ]
-        }
+
+@api_view(["POST"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_health_facilities_perms,
+        )
+    ]
+)
+def upload_health_facilities(request):
+    serializer = serializers.UploadSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    file = serializer.validated_data.get("file")
+    dry_run = serializer.validated_data.get("dry_run")
+    strategy = serializer.validated_data.get("strategy")
+
+    try:
+        logger.info(
+            f"Uploading health facilities (dry_run={dry_run}, strategy={strategy})..."
+        )
+        xml = utils.sanitize_xml(file)
+        result = services.upload_health_facilities(
+            request.user, xml=xml, strategy=strategy, dry_run=dry_run
+        )
+        logger.info(f"Health facilities upload completed: {result}")
         return Response(
-            data=data,
-            content_type="text/xml",
-            headers={
-                "Content-Disposition": "attachment; filename=health_facilities.xml"
-            },
+            {
+                "success": True,
+                "data": {
+                    "sent": result.sent,
+                    "created": result.created,
+                    "updated": result.updated,
+                    "errors": result.errors,
+                },
+            }
+        )
+    except ET.ParseError as exc:
+        logger.error(exc)
+        return Response(
+            {
+                "success": False,
+                "error": "Malformed XML",
+            }
         )
 
-    def post(self, request):
-        serializer = serializers.UploadSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
 
-        file = serializer.validated_data.get("file")
-        dry_run = serializer.validated_data.get("dry_run")
-        strategy = serializer.validated_data.get("strategy")
-
-        try:
-            logger.info(
-                f"Uploading health facilities (dry_run={dry_run}, strategy={strategy})..."
-            )
-            xml = utils.sanitize_xml(file)
-            result = services.upload_health_facilities(
-                request.user, xml=xml, strategy=strategy, dry_run=dry_run
-            )
-            logger.info(f"Health facilities upload completed: {result}")
-            return Response(
-                {
-                    "success": True,
-                    "data": {
-                        "sent": result.sent,
-                        "created": result.created,
-                        "updated": result.updated,
-                        "errors": result.errors,
-                    },
-                }
-            )
-        except ET.ParseError as exc:
-            logger.error(exc)
-            return Response(
-                {
-                    "success": False,
-                    "error": "Malformed XML",
-                }
-            )
-
-
-class DiagnosesAPIView(APIView):
-    permission_classes = [
+@api_view(["GET"])
+@permission_classes(
+    [
         checkUserWithRights(
             ToolsConfig.registers_diagnoses_perms,
         )
     ]
-    parser_classes = (parsers.MultiPartParser,)
+)
+@renderer_classes([serializers.DiagnosesXMLRenderer])
+def download_diagnoses(request):
+    queryset = Diagnosis.objects.filter(*filter_validity())
+    data = [serializers.format_diagnosis(hf) for hf in queryset]
+    return Response(
+        data=data,
+        headers={"Content-Disposition": "attachment; filename=diagnoses.xml"},
+    )
 
-    @renderer_classes([serializers.DiagnosesXMLRenderer])
-    def get(self, request):
-        queryset = Diagnosis.objects.filter(*filter_validity())
-        data = [serializers.format_diagnosis(hf) for hf in queryset]
-        return Response(
-            data=data,
-            content_type="text/xml",
-            headers={"Content-Disposition": "attachment; filename=diagnoses.xml"},
+
+@api_view(["POST"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_diagnoses_perms,
         )
+    ]
+)
+def upload_diagnoses(request):
+    serializer = serializers.DeletableUploadSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
 
-    def post(self, request):
-        serializer = serializers.DeletableUploadSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+    file = serializer.validated_data.get("file")
+    dry_run = serializer.validated_data.get("dry_run")
+    strategy = serializer.validated_data.get("strategy")
 
-        file = serializer.validated_data.get("file")
-        dry_run = serializer.validated_data.get("dry_run")
-        strategy = serializer.validated_data.get("strategy")
-
-        try:
-            logger.info(
-                f"Uploading diagnoses (dry_run={dry_run}, strategy={strategy})..."
-            )
-            xml = utils.sanitize_xml(file)
-            result = services.upload_diagnoses(
-                request.user, xml=xml, strategy=strategy, dry_run=dry_run
-            )
-            logger.info(f"Diagnoses upload completed: {result}")
-            return Response(
-                {
-                    "success": True,
-                    "data": {
-                        "sent": result.sent,
-                        "created": result.created,
-                        "updated": result.updated,
-                        "deleted": result.deleted,
-                        "errors": result.errors,
-                    },
-                }
-            )
-        except ET.ParseError as exc:
-            logger.error(exc)
-            return Response(
-                {
-                    "success": False,
-                    "error": "Malformed XML",
-                }
-            )
+    try:
+        logger.info(f"Uploading diagnoses (dry_run={dry_run}, strategy={strategy})...")
+        xml = utils.sanitize_xml(file)
+        result = services.upload_diagnoses(
+            request.user, xml=xml, strategy=strategy, dry_run=dry_run
+        )
+        logger.info(f"Diagnoses upload completed: {result}")
+        return Response(
+            {
+                "success": True,
+                "data": {
+                    "sent": result.sent,
+                    "created": result.created,
+                    "updated": result.updated,
+                    "deleted": result.deleted,
+                    "errors": result.errors,
+                },
+            }
+        )
+    except ET.ParseError as exc:
+        logger.error(exc)
+        return Response(
+            {
+                "success": False,
+                "error": "Malformed XML",
+            }
+        )
 
 
 def download_master_data(request):
