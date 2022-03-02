@@ -34,7 +34,6 @@ class DeletableUploadSerializer(UploadSerializer):
     )
 
 
-
 def format_health_facility(health_facility):
     return {
         "district_code": health_facility.location.code,
@@ -102,37 +101,36 @@ class DiagnosesXMLRenderer(CustomXMLRenderer):
 
 def format_location(location):
     if location.type == "R":
-        return {"Region": {"RegionCode": location.code, "RegionName": location.name}}
+        return {"region": {"region_code": location.code, "region_name": location.name}}
     elif location.type == "D":
         return {
-            "District": {
-                "RegionCode": location.parent.code,
-                "DistrictCode": location.code,
-                "DistrictName": location.name,
+            "district": {
+                "region_code": location.parent.code,
+                "district_code": location.code,
+                "district_name": location.name,
             }
         }
     elif location.type == "M":
         return {
-            "Municipality": {
-                "DistrictCode": location.parent.code,
-                "MunicipalityCode": location.code,
-                "MunicipalityName": location.name,
+            "municipality": {
+                "district_code": location.parent.code,
+                "municipality_code": location.code,
+                "municipality_name": location.name,
             }
         }
     elif location.type == "V":
         return {
-            "Village": {
-                "MunicipalityCode": location.parent.code,
-                "VillageCode": location.code,
-                "VillageName": location.name,
-                "MalePopulation": location.male_population or 0,
-                "FemalePopulation": location.female_population or 0,
-                "OtherPopulation": location.other_population or 0,
-                "Families": location.families or 0,
+            "village": {
+                "municipality_code": location.parent.code,
+                "village_code": location.code,
+                "village_name": location.name,
+                "male_population": location.male_population or 0,
+                "female_population": location.female_population or 0,
+                "other_population": location.other_population or 0,
+                "families": location.families or 0,
             }
         }
 
 
 def format_diagnosis(diagnosis):
-    return {"diagnostic_code": diagnosis.code, "diagnosis_name": diagnosis.name}
-
+    return {"diagnosis_code": diagnosis.code, "diagnosis_name": diagnosis.name}
