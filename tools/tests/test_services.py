@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 from django.test import TestCase
 from unittest import mock
 
@@ -6,7 +8,9 @@ from xml.etree import ElementTree
 
 
 class UploadClaimsTestCase(TestCase):
-    def test_upload_claims_unknown_hf(self):
+    @mock.patch('tools.services.django.conf')
+    def test_upload_claims_unknown_hf(self, row_security_mock):
+        row_security_mock.settings.ROW_SECURITY = MagicMock(return_value=True)
         mock_user = mock.Mock(is_anonymous=False)
         mock_user.has_perm = mock.MagicMock(return_value=True)
         with self.assertRaises(InvalidXMLError) as cm:
