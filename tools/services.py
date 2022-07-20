@@ -195,6 +195,9 @@ def get_parent_location(code):
     return Location.objects.filter(code=code, *filter_validity()).first()
 
 
+def __chunk_list(l, size=1000):
+    return (l[index:index + size] for index in range(0, len(l), size))
+
 def upload_locations(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
     logger.info(f"Uploading locations with strategy={strategy} & dry_run={dry_run}")
     try:
@@ -202,10 +205,14 @@ def upload_locations(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
     except Exception as exc:
         raise InvalidXMLError("XML file is invalid.") from exc
     result = UploadResult(errors=errors)
+
     ids = [x["code"] for x in chain.from_iterable(locations.values())]
-    existing_locations = {
-        l.code: l for l in Location.objects.filter(code__in=ids, *filter_validity())
-    }
+    existing_locations = {}
+    for ids_chunk in __chunk_list(ids):
+        existing_locations.update({
+            loc.code: loc for loc in Location.objects.filter(code__in=ids_chunk, *filter_validity())
+        })
+
     get_parent_location.cache_clear()
 
     for locations in locations.values():
