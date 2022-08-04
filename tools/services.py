@@ -23,7 +23,7 @@ from insuree.models import Family, Insuree, InsureePolicy
 from medical.models import Diagnosis, Item, Service
 from location.models import Location, HealthFacility, UserDistrict
 from medical_pricelist.models import ServicesPricelist, ItemsPricelist
-from claim.models import ClaimAdmin
+from claim.models import ClaimAdmin, Claim, Feedback
 from policy.models import Policy
 from policy.services import update_insuree_policies
 from .utils import dictfetchall, sanitize_xml, dmy_format_sql
@@ -1056,5 +1056,55 @@ def upload_renewals(archive, user):
             renewed_policies.append(policy)
 
 
-def upload_feedbacks():
-    pass
+def upload_feedbacks(archive, user):
+    """
+    This method loads an encrypted archive of renewals.
+    """
+    logger.info(f"Uploading feedback with user {user.id}")
+    feedback_saved = []
+    failed_feedback = []
+
+    archive_dir = open_offline_archive(archive)
+    for json_file in glob.glob(os.path.join(archive_dir, "*.json")):
+        with open(json_file) as f:
+            feedback = json.load(f)
+            db_claim = Claim.objects.filter(
+                id=feedback.get("ClaimId"),
+                insuree__chf_id=feedback.get("CHFID"),
+                validity_to__isnull=True,
+            ).first()
+            if not db_claim:
+                logger.warning("Claim feedback without existing claim")
+                failed_feedback.append(feedback)
+                continue
+            answers = feedback.get("Answers")
+            if answers is None or len(answers) != 5:
+                logger.warning("Claim feedback has an Answers field of length %s, expecting 5", len(answers))
+                failed_feedback.append(feedback)
+                continue
+            (care_rendered, payment_asked, drug_prescribed, drug_received, assessment) = answers
+
+            # TODO migrate this to a Claim service
+            db_feedback, db_feedback_created = Feedback.objects.get_or_create(
+                claim=db_claim,
+                validity_to=None,
+                defaults={
+                    care_rendered: care_rendered,
+                    payment_asked: payment_asked,
+                    drug_prescribed: drug_prescribed,
+                    drug_received: drug_received,
+                    assessment: assessment,
+                    feedback_date: feedback.get("Date"),
+                    audit_user_id: user.id_for_audit,
+                }
+            )
+            if db_feedback_created:
+                db_claim.save_history()
+                from core.utils import TimeUtils
+                db_claim.validity_from = TimeUtils.now()
+                db_claim.feedback = db_feedback
+                db_claim.feedback_status = Claim.FEEDBACK_DELIVERED
+                db_claim.feedback_available = True
+                db_claim.save()
+            feedback_saved.append(feedback)
+
