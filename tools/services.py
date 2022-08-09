@@ -198,6 +198,7 @@ def get_parent_location(code):
 def __chunk_list(l, size=1000):
     return (l[index:index + size] for index in range(0, len(l), size))
 
+
 def upload_locations(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
     logger.info(f"Uploading locations with strategy={strategy} & dry_run={dry_run}")
     try:
@@ -237,24 +238,22 @@ def upload_locations(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
                     continue
                 loc["parent"] = parent
 
-            if strategy == STRATEGY_INSERT:
+            if strategy == STRATEGY_INSERT or not existing:
                 if not dry_run:
-                    Location.objects.create(audit_user_id=user.id_for_audit, **loc)
-                result.created += 1
-
-            else:
-                if existing:
-                    if not dry_run:
-                        existing.save_history()
-                        [setattr(existing, key, loc[key]) for key in loc]
-                        existing.save()
-                    result.updated += 1
-                else:
-                    if not dry_run:
-                        existing = Location.objects.create(
-                            audit_user_id=user.id_for_audit, **loc
+                    location = Location.objects.create(audit_user_id=user.id_for_audit, **loc)
+                    if location.type == 'D':
+                        UserDistrict.objects.get_or_create(
+                            user=user.i_user,
+                            location=location,
+                            audit_user_id=user.id_for_audit,
                         )
-                    result.created += 1
+                result.created += 1
+            elif existing:
+                if not dry_run:
+                    existing.save_history()
+                    [setattr(existing, key, loc[key]) for key in loc]
+                    existing.save()
+                result.updated += 1
 
     return result
 
