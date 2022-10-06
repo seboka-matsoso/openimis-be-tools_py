@@ -12,7 +12,7 @@ class Migration(migrations.Migration):
     operations = [
         migrations.RunSQL(
             "ALTER TABLE tblExtracts ADD ExtractFile nvarchar(255) NULL"
-            if "sql_server" in settings.DB_ENGINE else
+            if settings.MSSQL else
             'ALTER TABLE "tblExtracts" ADD "ExtractFile" varchar(255)',
             reverse_sql='ALTER TABLE "tblExtracts" DROP "ExtractFile"',
         ),
