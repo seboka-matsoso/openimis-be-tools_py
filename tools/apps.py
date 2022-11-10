@@ -11,6 +11,7 @@ DEFAULT_CFG = {
     "extracts_officer_renewals_perms": [],
     "extracts_phone_extract_perms": [],
     "extracts_upload_claims_perms": [],
+    "master_data_password": None,
 }
 
 

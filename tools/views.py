@@ -1,6 +1,10 @@
 import logging
 import os
+import tempfile
 import xml.etree.ElementTree as ET
+
+from django.core.files.storage import default_storage
+from rest_framework.exceptions import bad_request, APIException
 
 from core.models import Officer
 from core.utils import filter_validity
@@ -16,7 +20,6 @@ from rest_framework.decorators import api_view, permission_classes, renderer_cla
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
-
 from . import serializers, services, utils
 from .apps import ToolsConfig
 
@@ -332,7 +335,81 @@ def upload_claims(request):
             continue
         except Exception as exc:
             logger.exception(exc)
-            errors.append("An unknown error occured.")
+            errors.append("An unknown error occurred.")
             continue
+
+    return JsonResponse({"success": len(errors) == 0, "errors": errors})
+
+
+@api_view(["POST"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_locations_perms,
+        )
+    ]
+)
+# @require_http_methods(["POST"])
+def upload_enrollments(request):
+    if not request.user.has_perms(ToolsConfig.extracts_upload_claims_perms):  # TODO enrollment perms
+        raise PermissionDenied(_("unauthorized"))
+
+    return _process_upload(request, services.upload_enrollments)
+
+
+@api_view(["POST"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_locations_perms,
+        )
+    ]
+)
+# @require_http_methods(["POST"])
+def upload_renewals(request):
+    if not request.user.has_perms(ToolsConfig.extracts_upload_claims_perms):  # TODO enrollment perms
+        raise PermissionDenied(_("unauthorized"))
+
+    return _process_upload(request, services.upload_renewals)
+
+
+@api_view(["POST"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_locations_perms,
+        )
+    ]
+)
+# @require_http_methods(["POST"])
+def upload_feedbacks(request):
+    if not request.user.has_perms(ToolsConfig.extracts_upload_claims_perms):  # TODO enrollment perms
+        raise PermissionDenied(_("unauthorized"))
+
+    return _process_upload(request, services.upload_feedbacks)
+
+
+def _process_upload(request, process_method):
+    if not request.FILES:
+        return JsonResponse({"error": "No file provided"}, status=400)
+
+    errors = []
+    for filename, uploaded_file in request.FILES.items():
+        try:
+            # The file is often in memory, the ZIP needs it as a real file path
+            with tempfile.NamedTemporaryFile(mode='wb+', suffix=".zip") as tmp_file:
+                logger.info(f"Processing renewals in {str(uploaded_file)}")
+                for chunk in uploaded_file.chunks():
+                    tmp_file.write(chunk)
+                tmp_file.seek(0)
+                process_method(tmp_file.name, request.user)
+        except (utils.ParseError, services.InvalidXMLError) as exc:
+            logger.exception(exc)
+            errors.append(f"File '{filename}' is not a valid XML")
+            continue
+        except Exception as exc:
+            logger.exception(exc)
+            errors.append("An unknown error occurred.")
+            return JsonResponse({"error": str(exc)}, status=500)
 
     return JsonResponse({"success": len(errors) == 0, "errors": errors})

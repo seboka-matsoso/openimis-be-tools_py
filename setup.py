@@ -25,6 +25,7 @@ setup(
         "djangorestframework-xml",
         "simplejson",
         "pyminizip",
+        "pyzipper",
         "defusedxml",
     ],
     classifiers=[
