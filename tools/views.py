@@ -15,7 +15,7 @@ from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext as _
 from django.views.decorators.http import require_http_methods
 from location.models import HealthFacility, Location
-from medical.models import Diagnosis
+from medical.models import Diagnosis, Item, Service
 from rest_framework.decorators import api_view, permission_classes, renderer_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.renderers import JSONRenderer
@@ -196,6 +196,42 @@ def download_diagnoses(request):
     return Response(
         data=data,
         headers={"Content-Disposition": "attachment; filename=diagnoses.xml"},
+    )
+
+
+@api_view(["GET"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_items_perms,
+        )
+    ]
+)
+@renderer_classes([serializers.ItemsXMLRenderer])
+def download_items(request):
+    queryset = Item.objects.filter(*filter_validity())
+    data = [serializers.format_items(item) for item in queryset]
+    return Response(
+        data=data,
+        headers={"Content-Disposition": "attachment; filename=items.xml"},
+    )
+
+
+@api_view(["GET"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_services_perms,
+        )
+    ]
+)
+@renderer_classes([serializers.ServicesXMLRenderer])
+def download_services(request):
+    queryset = Service.objects.filter(*filter_validity())
+    data = [serializers.format_services(service) for service in queryset]
+    return Response(
+        data=data,
+        headers={"Content-Disposition": "attachment; filename=services.xml"},
     )
 
 

@@ -99,6 +99,16 @@ class DiagnosesXMLRenderer(CustomXMLRenderer):
     item_tag_name = "Diagnosis"
 
 
+class ItemsXMLRenderer(CustomXMLRenderer):
+    root_tag_name = "Items"
+    item_tag_name = "Item"
+
+
+class ServicesXMLRenderer(CustomXMLRenderer):
+    root_tag_name = "Services"
+    item_tag_name = "Service"
+
+
 def format_location(location):
     if location.type == "R":
         return {"region": {"region_code": location.code, "region_name": location.name}}
@@ -134,3 +144,26 @@ def format_location(location):
 
 def format_diagnosis(diagnosis):
     return {"diagnosis_code": diagnosis.code, "diagnosis_name": diagnosis.name}
+
+
+def format_items(item):
+    return {
+        "item_code": item.code,
+        "item_name": item.name,
+        "item_type": item.type,
+        "item_package": item.package,
+        "item_price": item.price,
+        "item_quantity": item.quantity,
+    }
+
+
+def format_services(service):
+    return {
+        "service_code": service.code,
+        "service_name": service.name,
+        "service_type": service.type,
+        "service_category": service.category,
+        "service_price": service.price,
+        "service_level": service.level,
+        "service_care_type": service.care_type,
+    }
