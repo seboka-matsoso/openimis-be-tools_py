@@ -280,6 +280,51 @@ def upload_diagnoses(request):
         )
 
 
+@api_view(["POST"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_items_perms,
+        )
+    ]
+)
+def upload_items(request):
+    serializer = serializers.DeletableUploadSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    file = serializer.validated_data.get("file")
+    dry_run = serializer.validated_data.get("dry_run")
+    strategy = serializer.validated_data.get("strategy")
+
+    try:
+        logger.info(f"Uploading medical items (dry_run={dry_run}, strategy={strategy})...")
+        xml = utils.sanitize_xml(file)
+        result = services.upload_items(
+            request.user, xml=xml, strategy=strategy, dry_run=dry_run
+        )
+        logger.info(f"Medical items upload completed: {result}")
+        return Response(
+            {
+                "success": True,
+                "data": {
+                    "sent": result.sent,
+                    "created": result.created,
+                    "updated": result.updated,
+                    "deleted": result.deleted,
+                    "errors": result.errors,
+                },
+            }
+        )
+    except ET.ParseError as exc:
+        logger.error(exc)
+        return Response(
+            {
+                "success": False,
+                "error": "Malformed XML",
+            }
+        )
+
+
 def download_master_data(request):
     if not request.user.has_perms(ToolsConfig.extracts_master_data_perms):
         raise PermissionDenied(_("unauthorized"))

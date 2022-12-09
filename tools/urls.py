@@ -12,6 +12,7 @@ urlpatterns = [
     path("registers/download_diagnoses", views.download_diagnoses),
     path("registers/upload_diagnoses", views.upload_diagnoses),
     path("registers/download_items", views.download_items),
+    path("registers/upload_items", views.upload_items),
     path("registers/download_services", views.download_services),
     path("extracts/download_master_data", csrf_exempt(views.download_master_data)),
     path("extracts/download_phone_extract", views.download_phone_extract),

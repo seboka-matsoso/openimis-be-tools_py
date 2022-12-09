@@ -151,8 +151,9 @@ def format_items(item):
         "item_code": item.code,
         "item_name": item.name,
         "item_type": item.type,
-        "item_package": item.package,
         "item_price": item.price,
+        "item_care_type": item.care_type,
+        "item_package": item.package,
         "item_quantity": item.quantity,
     }
 

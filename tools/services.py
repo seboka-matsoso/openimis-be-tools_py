@@ -2,6 +2,7 @@ import glob
 from collections import defaultdict
 import functools
 import decimal
+from typing import List
 
 import pyzipper
 from django.conf import settings
@@ -20,7 +21,7 @@ from tools.apps import ToolsConfig
 from datetime import datetime
 
 from insuree.models import Family, Insuree, InsureePolicy
-from medical.models import Diagnosis, Item, Service
+from medical.models import Diagnosis, Item, Service, ItemOrService
 from location.models import Location, HealthFacility, UserDistrict
 from medical_pricelist.models import ServicesPricelist, ItemsPricelist
 from claim.models import ClaimAdmin, Claim, Feedback
@@ -52,11 +53,11 @@ class InvalidXMLError(ValueError):
 
 @dataclass
 class UploadResult:
+    errors: List
     sent: int = 0
     created: int = 0
     updated: int = 0
     deleted: int = 0
-    errors: int = 0
 
 
 def load_diagnoses_xml(xml):
@@ -80,6 +81,41 @@ def load_diagnoses_xml(xml):
             errors.append(f"Name cannot be longer than 255 characters: '{name}'")
         else:
             result.append(dict(code=code, name=name))
+
+    return result, errors
+
+
+def load_items_xml(xml):
+    result = []
+    errors = []
+    root = xml.getroot()
+
+    for elm in root.findall("Item"):
+        try:
+            code = elm.find("ItemCode").text.strip()
+            name = elm.find("ItemName").text.strip()
+            item_type = elm.find("ItemType").text.strip().upper()
+            price = float(elm.find("ItemPrice").text.strip())
+            care_type = elm.find("ItemCareType").text.strip().upper()
+        except ValueError as ex:
+            errors.append(f"Error with price - please use '.' as decimal separator - item code = {code}")
+            continue
+        except Exception as ex_2:
+            errors.append("Item is missing one of the following fields: code, name, type, price or care_type")
+            continue
+
+        if any([res["code"].lower() == code.lower() for res in result]):
+            errors.append(f"'{code}' is already present in the list")
+        elif len(code) < 1 or len(code) > 6:
+            errors.append(f"Code must be between 1 and 6 characters: '{code}'")
+        elif len(name) < 1 or len(name) > 100:
+            errors.append(f"Name must be between 1 and 100 characters: '{name}'")
+        elif item_type not in Item.TYPE_VALUES:
+            errors.append(f"Type ('{item_type}') is invalid. Must be one of the following: {Item.TYPE_VALUES}")
+        elif care_type not in ItemOrService.CARE_TYPE_VALUES:
+            errors.append(f"Care type ('{care_type}') is invalid. Must be one of the following: {ItemOrService.CARE_TYPE_VALUES}")
+        else:
+            result.append(dict(code=code, name=name, type=item_type, price=price, care_type=care_type))
 
     return result, errors
 
@@ -109,7 +145,7 @@ def upload_diagnoses(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
             result.errors.append(f"{existing.code} already exists")
             continue
         elif not existing and strategy == STRATEGY_UPDATE:
-            result.errors.append(f"{strategy['code']} does not exist")
+            result.errors.append(f"{diagnosis['code']} does not exist")
             continue
 
         if strategy == STRATEGY_INSERT:
@@ -143,6 +179,62 @@ def upload_diagnoses(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
             )
 
     logger.debug(f"Finished processing of diagnoses: {result}")
+    return result
+
+
+def upload_items(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
+    logger.info("Uploading medical items with strategy=%s & dry_run=%s", strategy, dry_run)
+    try:
+        raw_items, errors = load_items_xml(xml)
+    except Exception as exc:
+        raise InvalidXMLError("XML file is invalid.") from exc
+
+    result = UploadResult(errors=errors)
+    ids = []
+    db_items = {
+        x.code: x
+        for x in Item.objects.filter(
+            code__in=[x["code"] for x in raw_items], *filter_validity()
+        )
+    }
+    for item in raw_items:
+        logger.debug("Processing %s...", item['code'])
+        existing = db_items.get(item["code"], None)
+        result.sent += 1
+        ids.append(item["code"])
+
+        if existing and strategy == STRATEGY_INSERT:
+            result.errors.append(f"{existing.code} already exists")
+            continue
+        elif not existing and strategy == STRATEGY_UPDATE:
+            result.errors.append(f"{item['code']} does not exist")
+            continue
+
+        if strategy == STRATEGY_INSERT:
+            if not dry_run:
+                Item.objects.create(audit_user_id=user.id_for_audit, **item)
+            result.created += 1
+
+        else:
+            if existing:
+                if not dry_run:
+                    existing.save_history()
+                    [setattr(existing, key, item[key]) for key in item]
+                    existing.save()
+                result.updated += 1
+            else:
+                if not dry_run:
+                    Item.objects.create(audit_user_id=user.id_for_audit, **item)
+                result.created += 1
+
+    if strategy == STRATEGY_INSERT_UPDATE_DELETE:
+        qs = Item.objects.filter(~Q(code__in=ids)).filter(validity_to__isnull=True)
+        result.deleted = len(qs)
+        logger.info("Delete %s items", result.deleted)
+        if not dry_run:
+            qs.update(validity_to=datetime.datetime.now(), audit_user_id=user.id_for_audit)
+
+    logger.debug(f"Finished processing of items: {result}")
     return result
 
 
@@ -234,7 +326,7 @@ def upload_locations(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
                 result.errors.append(f"{existing.code} already exists")
                 continue
             elif not existing and strategy == STRATEGY_UPDATE:
-                result.errors.append(f"{strategy['code']} does not exist")
+                result.errors.append(f"{loc['code']} does not exist")
                 continue
 
             if loc.get("parent", None):
@@ -339,7 +431,7 @@ def upload_health_facilities(user, xml, strategy=STRATEGY_INSERT, dry_run=False)
     get_parent_location.cache_clear()
 
     logger.info(
-        "Uploading health facilities with strategy={strategy} & dry_run={dry_run}"
+        "Uploading health facilities with strategy=%s & dry_run=%s", strategy, dry_run
     )
     try:
         raw_health_facilities, errors = load_health_facilities_xml(xml)
@@ -362,7 +454,7 @@ def upload_health_facilities(user, xml, strategy=STRATEGY_INSERT, dry_run=False)
             result.errors.append(f"Health facility '{existing.code}' already exists")
             continue
         elif not existing and strategy == STRATEGY_UPDATE:
-            result.errors.append(f"Health facility '{strategy['code']}' does not exist")
+            result.errors.append(f"Health facility '{facility['code']}' does not exist")
             continue
 
         facility["location"] = get_parent_location(facility.pop("district_code"))
