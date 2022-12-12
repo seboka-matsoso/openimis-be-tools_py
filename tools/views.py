@@ -297,12 +297,12 @@ def upload_items(request):
     strategy = serializer.validated_data.get("strategy")
 
     try:
-        logger.info(f"Uploading medical items (dry_run={dry_run}, strategy={strategy})...")
+        logger.info("Uploading medical items (dry_run=%s, strategy=%s)...", dry_run, strategy)
         xml = utils.sanitize_xml(file)
         result = services.upload_items(
             request.user, xml=xml, strategy=strategy, dry_run=dry_run
         )
-        logger.info(f"Medical items upload completed: {result}")
+        logger.info("Medical items upload completed: %s", result)
         return Response(
             {
                 "success": True,

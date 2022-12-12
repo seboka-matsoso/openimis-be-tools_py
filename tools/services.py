@@ -234,7 +234,7 @@ def upload_items(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
         if not dry_run:
             qs.update(validity_to=datetime.datetime.now(), audit_user_id=user.id_for_audit)
 
-    logger.debug(f"Finished processing of items: {result}")
+    logger.debug("Finished processing of items: %s", result)
     return result
 
 
