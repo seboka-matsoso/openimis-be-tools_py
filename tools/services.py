@@ -5,6 +5,8 @@ import decimal
 from typing import List
 
 import pyzipper
+from core import PATIENT_CATEGORY_MASK_MALE, PATIENT_CATEGORY_MASK_FEMALE, PATIENT_CATEGORY_MASK_ADULT, \
+    PATIENT_CATEGORY_MASK_MINOR
 from django.conf import settings
 from django.db import connection
 from itertools import chain
@@ -40,7 +42,6 @@ import os
 from xml.etree import ElementTree
 
 logger = logging.getLogger(__name__)
-
 
 # It's not great to convert decimals to float but keeping it in string would
 # mean updating the mobile app.
@@ -85,6 +86,9 @@ def load_diagnoses_xml(xml):
     return result, errors
 
 
+VALID_PATIENT_CATEGORY_INPUTS = [0, 1]
+
+
 def load_items_xml(xml):
     result = []
     errors = []
@@ -92,32 +96,96 @@ def load_items_xml(xml):
 
     for elm in root.findall("Item"):
         try:
+            # Item mandatory fields
             code = elm.find("ItemCode").text.strip()
             name = elm.find("ItemName").text.strip()
             item_type = elm.find("ItemType").text.strip().upper()
             price = float(elm.find("ItemPrice").text.strip())
             care_type = elm.find("ItemCareType").text.strip().upper()
-        except ValueError as ex:
-            errors.append(f"Error with price - please use '.' as decimal separator - item code = {code}")
+            # xxx_cat = Item.patient_category
+            adult_cat = int(elm.find("ItemAdultCategory").text.strip())
+            minor_cat = int(elm.find("ItemMinorCategory").text.strip())
+            male_cat = int(elm.find("ItemMaleCategory").text.strip())
+            female_cat = int(elm.find("ItemFemaleCategory").text.strip())
+
+        except ValueError as parsing_ex:
+            if "invalid literal for int()" in str(parsing_ex):
+                errors.append(f"Item '{code}': patient categories are invalid. Please use '0' for no or '1' for yes")
+            elif "could not convert string to float" in str(parsing_ex):
+                errors.append(f"Item '{code}': price is invalid. Please use '.' as decimal separator, without any currency symbol.")
             continue
-        except Exception as ex_2:
-            errors.append("Item is missing one of the following fields: code, name, type, price or care_type")
+        except AttributeError as missing_value_ex:
+            errors.append(
+                f"Item is missing one of the following fields: code, name, type, price, care type, "
+                f"male category, female category, adult category or minor category.")
             continue
+
+        categories = [adult_cat, minor_cat, male_cat, female_cat]
 
         if any([res["code"].lower() == code.lower() for res in result]):
-            errors.append(f"'{code}' is already present in the list")
+            errors.append(f"Item '{code}': exists multiple times in the list")
         elif len(code) < 1 or len(code) > 6:
-            errors.append(f"Code must be between 1 and 6 characters: '{code}'")
+            errors.append(f"Item '{code}': code is invalid. Must be between 1 and 6 characters")
         elif len(name) < 1 or len(name) > 100:
-            errors.append(f"Name must be between 1 and 100 characters: '{name}'")
+            errors.append(f"Item '{code}': name is invalid ('{name}'). Must be between 1 and 100 characters")
         elif item_type not in Item.TYPE_VALUES:
-            errors.append(f"Type ('{item_type}') is invalid. Must be one of the following: {Item.TYPE_VALUES}")
+            errors.append(f"Item '{code}': type is invalid ('{item_type}'). Must be one of the following: {Item.TYPE_VALUES}")
         elif care_type not in ItemOrService.CARE_TYPE_VALUES:
-            errors.append(f"Care type ('{care_type}') is invalid. Must be one of the following: {ItemOrService.CARE_TYPE_VALUES}")
+            errors.append(
+                f"Item '{code}': care type is invalid ('{care_type}'). Must be one of the following: {ItemOrService.CARE_TYPE_VALUES}")
+        elif any([cat not in VALID_PATIENT_CATEGORY_INPUTS for cat in categories]):
+            errors.append(
+                f"Item '{code}': patient categories are invalid. Must be one of the following: {VALID_PATIENT_CATEGORY_INPUTS}")
         else:
-            result.append(dict(code=code, name=name, type=item_type, price=price, care_type=care_type))
+            category = 0
+            if male_cat:
+                category = category | PATIENT_CATEGORY_MASK_MALE
+            if female_cat:
+                category = category | PATIENT_CATEGORY_MASK_FEMALE
+            if adult_cat:
+                category = category | PATIENT_CATEGORY_MASK_ADULT
+            if minor_cat:
+                category = category | PATIENT_CATEGORY_MASK_MINOR
+
+            optional_fields, optional_error = parse_optional_item_fields(elm, code)
+            if optional_error:
+                errors.append(optional_error)
+            else:
+                result.append(dict(code=code, name=name, type=item_type, price=price, care_type=care_type,
+                                   patient_category=category, **optional_fields))
 
     return result, errors
+
+
+def parse_optional_item_fields(elm, code):
+    optional_values = {}
+    error_message = ""
+    try:
+        raw_package = elm.find("ItemPackage")
+        raw_quantity = elm.find("ItemQuantity")
+        raw_frequency = elm.find("ItemFrequency")
+
+        # can't do 'if raw_quantity' only because of Element.__bool__ (see doc)
+        if raw_quantity is not None and raw_quantity.text:
+            optional_values["quantity"] = float(raw_quantity.text.strip())
+        if raw_frequency is not None and raw_frequency.text:
+            optional_values["frequency"] = int(raw_frequency.text.strip())
+        if raw_package is not None and raw_package.text:
+            package = raw_package.text.strip()
+            if len(package) < 1 or len(package) > 255:
+                error_message = f"Item '{code}': package is invalid ('{package}'). Must be between 1 and 255 characters"
+            else:
+                optional_values["package"] = package
+
+        return optional_values, error_message
+
+    except ValueError as parsing_ex:
+        if "invalid literal for int()" in str(parsing_ex):
+            error_message = f"Item '{code}': frequency is invalid. Please enter a non decimal number of days."
+        elif "could not convert string to float" in str(parsing_ex):
+            error_message = f"Item '{code}': quantity is invalid. Please use '.' as decimal separator."
+
+        return optional_values, error_message
 
 
 def upload_diagnoses(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
@@ -184,11 +252,8 @@ def upload_diagnoses(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
 
 def upload_items(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
     logger.info("Uploading medical items with strategy=%s & dry_run=%s", strategy, dry_run)
-    try:
-        raw_items, errors = load_items_xml(xml)
-    except Exception as exc:
-        raise InvalidXMLError("XML file is invalid.") from exc
 
+    raw_items, errors = load_items_xml(xml)
     result = UploadResult(errors=errors)
     ids = []
     db_items = {
@@ -197,6 +262,7 @@ def upload_items(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
             code__in=[x["code"] for x in raw_items], *filter_validity()
         )
     }
+
     for item in raw_items:
         logger.debug("Processing %s...", item['code'])
         existing = db_items.get(item["code"], None)
@@ -508,7 +574,8 @@ def create_master_data_export(user):
     queries = {
         "confirmationTypes": """SELECT "ConfirmationTypeCode", "ConfirmationType", "SortOrder", "AltLanguage" FROM "tblConfirmationTypes";""",
         "controls": """SELECT "FieldName", "Adjustibility" FROM "tblControls";""",
-        "education": """SELECT "EducationId", "Education", "SortOrder", "AltLanguage" FROM "tblEducations";""",  # and not educations
+        "education": """SELECT "EducationId", "Education", "SortOrder", "AltLanguage" FROM "tblEducations";""",
+        # and not educations
         "familyTypes": """SELECT "FamilyTypeCode", "FamilyType", "SortOrder", "AltLanguage" FROM "tblFamilyTypes";""",
         "hf": """SELECT "HfID", "HFCode", "HFName", "LocationId", "HFLevel" FROM "tblHF" WHERE "ValidityTo" IS NULL;""",
         "identificationTypes": """SELECT "IdentificationCode", "IdentificationTypes", "SortOrder", "AltLanguage" FROM "tblIdentificationTypes";""",
@@ -756,7 +823,8 @@ def create_phone_extract_db(location_id, with_insuree=False):
         # Controls
         with db_con:
             db_con.executemany(
-                "INSERT INTO tblControls (FieldName, Adjustibility, Usage) VALUES (?, ?, ?)",  # Yes, the typo in 'Adjustibility' is on purpose.
+                "INSERT INTO tblControls (FieldName, Adjustibility, Usage) VALUES (?, ?, ?)",
+                # Yes, the typo in 'Adjustibility' is on purpose.
                 get_controls(),
             )
 
@@ -811,9 +879,9 @@ def upload_claim(user, xml):
         districts = UserDistrict.get_user_districts(user._u)
         hf_code = xml.find("Claim").find("Details").find("HFCode").text
         if not (
-            HealthFacility.filter_queryset()
-            .filter(location_id__in=[l.location_id for l in districts], code=hf_code)
-            .exists()
+                HealthFacility.filter_queryset()
+                        .filter(location_id__in=[l.location_id for l in districts], code=hf_code)
+                        .exists()
         ):
             raise InvalidXMLError(
                 f"User cannot upload claims for health facility {hf_code}"
@@ -1199,4 +1267,3 @@ def upload_feedbacks(archive, user):
                 db_claim.feedback_available = True
                 db_claim.save()
             feedback_saved.append(feedback)
-

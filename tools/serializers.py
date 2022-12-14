@@ -8,6 +8,7 @@ from rest_framework_xml.renderers import XMLRenderer
 
 from rest_framework import serializers
 
+from core.utils import PATIENT_CATEGORY_MASK_ADULT, PATIENT_CATEGORY_MASK_MALE, PATIENT_CATEGORY_MASK_MINOR, PATIENT_CATEGORY_MASK_FEMALE
 
 class UploadSerializer(serializers.Serializer):
     dry_run = serializers.BooleanField()
@@ -147,14 +148,24 @@ def format_diagnosis(diagnosis):
 
 
 def format_items(item):
+    pat_cat = item.patient_category
+    adult_cat = pat_cat & PATIENT_CATEGORY_MASK_ADULT
+    minor_cat = pat_cat & PATIENT_CATEGORY_MASK_MINOR
+    male_cat = pat_cat & PATIENT_CATEGORY_MASK_MALE
+    female_cat = pat_cat & PATIENT_CATEGORY_MASK_FEMALE
     return {
         "item_code": item.code,
         "item_name": item.name,
         "item_type": item.type,
         "item_price": item.price,
         "item_care_type": item.care_type,
+        "item_male_category": male_cat,
+        "item_female_category": female_cat if not female_cat else 1,
+        "item_adult_category": adult_cat if not adult_cat else 1,
+        "item_minor_category": minor_cat if not minor_cat else 1,
         "item_package": item.package,
         "item_quantity": item.quantity,
+        "item_frequency ": item.frequency,
     }
 
 
