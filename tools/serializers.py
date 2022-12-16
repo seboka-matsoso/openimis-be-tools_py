@@ -8,7 +8,9 @@ from rest_framework_xml.renderers import XMLRenderer
 
 from rest_framework import serializers
 
-from core.utils import PATIENT_CATEGORY_MASK_ADULT, PATIENT_CATEGORY_MASK_MALE, PATIENT_CATEGORY_MASK_MINOR, PATIENT_CATEGORY_MASK_FEMALE
+from core.utils import PATIENT_CATEGORY_MASK_ADULT, PATIENT_CATEGORY_MASK_MALE, PATIENT_CATEGORY_MASK_MINOR, \
+    PATIENT_CATEGORY_MASK_FEMALE
+
 
 class UploadSerializer(serializers.Serializer):
     dry_run = serializers.BooleanField()
@@ -148,6 +150,10 @@ def format_diagnosis(diagnosis):
 
 
 def format_items(item):
+    """
+    Formats a medical.Item object for an XML export.
+    This function lists and formats all the medical.Item fields that will be exported.
+    """
     pat_cat = item.patient_category
     adult_cat = pat_cat & PATIENT_CATEGORY_MASK_ADULT
     minor_cat = pat_cat & PATIENT_CATEGORY_MASK_MINOR

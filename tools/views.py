@@ -3,9 +3,6 @@ import os
 import tempfile
 import xml.etree.ElementTree as ET
 
-from django.core.files.storage import default_storage
-from rest_framework.exceptions import bad_request, APIException
-
 from core.models import Officer
 from core.utils import filter_validity
 from django.core.exceptions import PermissionDenied
@@ -18,7 +15,6 @@ from location.models import HealthFacility, Location
 from medical.models import Diagnosis, Item, Service
 from rest_framework.decorators import api_view, permission_classes, renderer_classes
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from . import serializers, services, utils
 from .apps import ToolsConfig
@@ -209,6 +205,23 @@ def download_diagnoses(request):
 )
 @renderer_classes([serializers.ItemsXMLRenderer])
 def download_items(request):
+    """Downloads all medical.Item objects in an XML file.
+
+    The list of exported fields can be modified in serializers.format_items().
+
+    Calling this function is restricted to some users, see ToolsConfig.
+
+    Parameters
+    ----------
+    request : rest_framework.request.Request
+        The request that is asking to download items.
+
+    Returns
+    ----------
+    rest_framework.response.Response
+        The requested data in an XML file.
+
+    """
     queryset = Item.objects.filter(*filter_validity())
     data = [serializers.format_items(item) for item in queryset]
     return Response(
@@ -289,6 +302,26 @@ def upload_diagnoses(request):
     ]
 )
 def upload_items(request):
+    """Uploads an XML file containing medical.Item entries.
+
+    Calling this function is restricted to some users, see ToolsConfig.
+
+    Parameters
+    ----------
+    request : rest_framework.request.Request
+        The request containing all data.
+
+    Returns
+    ------
+    rest_framework.response.Response
+        Represents the number of entries received, with the number of created/updated/deleted
+        medical.Item objects, as well as the list of errors that have occurred while each entry was processed.
+
+    Raises
+    ------
+    ET.ParseError
+        If the structure of the XML file is invalid.
+    """
     serializer = serializers.DeletableUploadSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
 
