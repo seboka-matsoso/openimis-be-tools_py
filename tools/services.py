@@ -214,7 +214,7 @@ def get_xml_element(elm, element_name, default=marker):
     if default == marker:
         return element.text.strip()
     else:
-        return element.text.strip() if element is not None else default
+        return element.text.strip() if element is not None and element.text is not None else default
 
 
 class InvalidXmlInt(ValueError):
@@ -225,6 +225,8 @@ class InvalidXmlInt(ValueError):
 def get_xml_element_int(elm, element_name, default=marker):
     element_text = get_xml_element(elm, element_name, default)
     try:
+        if element_text is None:
+            return None
         return int(element_text)
     except ValueError as exc:
         raise InvalidXmlInt(f"Invalid integer value for {element_name}: {element_text}") from exc
@@ -238,6 +240,8 @@ class InvalidXmlFloat(ValueError):
 def get_xml_element_float(elm, element_name, default=marker):
     element_text = get_xml_element(elm, element_name, default)
     try:
+        if element_text is None:
+            return None
         return float(element_text)
     except ValueError as exc:
         raise InvalidXmlFloat(f"Invalid float value for {element_name}: {element_text}") from exc
@@ -277,16 +281,19 @@ def parse_optional_item_fields(elm, code):
         raw_frequency = elm.find("ItemFrequency")
 
         # can't do 'if raw_quantity' only because of Element.__bool__ (see doc)
-        optional_values["quantity"] = get_xml_element_float(elm, "ItemQuantity", None)
-        optional_values["frequency"] = get_xml_element_float(elm, "ItemFrequency", None)
-        optional_values["package"] = get_xml_element_float(elm, "ItemPackage", None)
-        if optional_values["package"] is not None:
-
-            if len(optional_values["package"]) < 1 or len(optional_values["package"]) > 255:
-                error_message = f"Item '{code}': package is invalid ('{optional_values['package']}'). " \
+        quantity = get_xml_element_float(elm, "ItemQuantity", None)
+        if quantity is not None:
+            optional_values["quantity"] = quantity
+        frequency = get_xml_element_int(elm, "ItemFrequency", None)
+        if frequency is not None:
+            optional_values["frequency"] = frequency
+        package = get_xml_element(elm, "ItemPackage", None)
+        if package is not None:
+            if len(package) < 1 or len(package) > 255:
+                error_message = f"Item '{code}': package is invalid ('{package}'). " \
                                 f"Must be between 1 and 255 characters"
             else:
-                optional_values["package"] = optional_values["package"]
+                optional_values["package"] = package
 
         return optional_values, error_message
 
