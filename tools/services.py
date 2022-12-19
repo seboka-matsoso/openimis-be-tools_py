@@ -68,8 +68,8 @@ def load_diagnoses_xml(xml):
 
     for elm in root.findall("Diagnosis"):
         try:
-            code = elm.find("DiagnosisCode").text.strip()
-            name = elm.find("DiagnosisName").text.strip()
+            code = get_xml_element(elm, "DiagnosisCode")
+            name = get_xml_element(elm, "DiagnosisName")
         except:
             errors.append("Diagnosis has no code or no name")
             continue
@@ -123,23 +123,23 @@ def parse_xml_items(xml):
     for elm in root.findall("Item"):
         try:
             # Item mandatory fields
-            code = elm.find("ItemCode").text.strip()
-            name = elm.find("ItemName").text.strip()
-            item_type = elm.find("ItemType").text.strip().upper()
-            price = float(elm.find("ItemPrice").text.strip())
-            care_type = elm.find("ItemCareType").text.strip().upper()
+            code = get_xml_element(elm, "ItemCode")
+            name = get_xml_element(elm, "ItemName")
+            item_type = get_xml_element(elm, "ItemType").upper()
+            price = get_xml_element_float(elm, "ItemPrice")
+            care_type = get_xml_element(elm, "ItemCareType").upper()
             # The xxx_cat fields = Item.patient_category
-            adult_cat = int(elm.find("ItemAdultCategory").text.strip())
-            minor_cat = int(elm.find("ItemMinorCategory").text.strip())
-            male_cat = int(elm.find("ItemMaleCategory").text.strip())
-            female_cat = int(elm.find("ItemFemaleCategory").text.strip())
+            adult_cat = get_xml_element_int(elm, "ItemAdultCategory")
+            minor_cat = get_xml_element_int(elm, "ItemMinorCategory")
+            male_cat = get_xml_element_int(elm, "ItemMaleCategory")
+            female_cat = get_xml_element_int(elm, "ItemFemaleCategory")
 
-        except ValueError as parsing_ex:
-            if "invalid literal for int()" in str(parsing_ex):
-                errors.append(f"Item '{code}': patient categories are invalid. Please use '0' for no or '1' for yes")
-            elif "could not convert string to float" in str(parsing_ex):
-                errors.append(f"Item '{code}': price is invalid. Please use '.' "
-                              f"as decimal separator, without any currency symbol.")
+        except InvalidXmlInt as parsing_ex:
+            errors.append(f"Item '{code}': patient categories are invalid. Please use '0' for no or '1' for yes")
+            continue
+        except InvalidXmlFloat as parsing_ex:
+            errors.append(f"Item '{code}': price is invalid. Please use '.' "
+                          f"as decimal separator, without any currency symbol.")
             continue
         except AttributeError as missing_value_ex:
             errors.append(
@@ -190,6 +190,59 @@ def parse_xml_items(xml):
     return result, errors
 
 
+marker = object()  # Used to mark missing values in get_xml_element
+
+
+def get_xml_element(elm, element_name, default=marker):
+    """Gets the text of an XML element, stripping it.
+
+    Parameters
+    ----------
+    elm : xml.etree.ElementTree.Element
+        The XML element.
+    element_name : str
+        The name of the XML element.
+    default : object
+        The default value to return if the element is missing. If unspecified, the exception will bubble up.
+
+    Returns
+    -------
+    str
+        The text of the XML element.
+    """
+    element = elm.find(element_name)
+    if default == marker:
+        return element.text.strip()
+    else:
+        return element.text.strip() if element is not None else default
+
+
+class InvalidXmlInt(ValueError):
+    """Exception raised when an XML element is not a valid integer."""
+    pass
+
+
+def get_xml_element_int(elm, element_name, default=marker):
+    element_text = get_xml_element(elm, element_name, default)
+    try:
+        return int(element_text)
+    except ValueError as exc:
+        raise InvalidXmlInt(f"Invalid integer value for {element_name}: {element_text}") from exc
+
+
+class InvalidXmlFloat(ValueError):
+    """Exception raised when an XML element is not a valid float."""
+    pass
+
+
+def get_xml_element_float(elm, element_name, default=marker):
+    element_text = get_xml_element(elm, element_name, default)
+    try:
+        return float(element_text)
+    except ValueError as exc:
+        raise InvalidXmlFloat(f"Invalid float value for {element_name}: {element_text}") from exc
+
+
 def parse_optional_item_fields(elm, code):
     """Parses optional medical.Item fields in an Element.
 
@@ -221,30 +274,28 @@ def parse_optional_item_fields(elm, code):
     error_message = ""
     try:
         raw_package = elm.find("ItemPackage")
-        raw_quantity = elm.find("ItemQuantity")
         raw_frequency = elm.find("ItemFrequency")
 
         # can't do 'if raw_quantity' only because of Element.__bool__ (see doc)
-        if raw_quantity is not None and raw_quantity.text:
-            optional_values["quantity"] = float(raw_quantity.text.strip())
-        if raw_frequency is not None and raw_frequency.text:
-            optional_values["frequency"] = int(raw_frequency.text.strip())
-        if raw_package is not None and raw_package.text:
-            package = raw_package.text.strip()
-            if len(package) < 1 or len(package) > 255:
-                error_message = f"Item '{code}': package is invalid ('{package}'). Must be between 1 and 255 characters"
+        optional_values["quantity"] = get_xml_element_float(elm, "ItemQuantity", None)
+        optional_values["frequency"] = get_xml_element_float(elm, "ItemFrequency", None)
+        optional_values["package"] = get_xml_element_float(elm, "ItemPackage", None)
+        if optional_values["package"] is not None:
+
+            if len(optional_values["package"]) < 1 or len(optional_values["package"]) > 255:
+                error_message = f"Item '{code}': package is invalid ('{optional_values['package']}'). " \
+                                f"Must be between 1 and 255 characters"
             else:
-                optional_values["package"] = package
+                optional_values["package"] = optional_values["package"]
 
         return optional_values, error_message
 
-    except ValueError as parsing_ex:
-        if "invalid literal for int()" in str(parsing_ex):
-            error_message = f"Item '{code}': frequency is invalid. Please enter a non decimal number of days."
-        elif "could not convert string to float" in str(parsing_ex):
-            error_message = f"Item '{code}': quantity is invalid. Please use '.' as decimal separator."
+    except InvalidXmlInt as parsing_ex:
+        error_message = f"Item '{code}': frequency is invalid. Please enter a non decimal number of days."
+    except InvalidXmlFloat as parsing_ex:
+        error_message = f"Item '{code}': quantity is invalid. Please use '.' as decimal separator."
 
-        return optional_values, error_message
+    return optional_values, error_message
 
 
 def upload_diagnoses(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
@@ -413,27 +464,27 @@ def load_locations_xml(xml):
         try:
             if elm.tag == "Region":
                 data["type"] = "R"
-                data["code"] = elm.find("RegionCode").text.strip()
-                data["name"] = elm.find("RegionName").text.strip()
+                data["code"] = get_xml_element(elm, "RegionCode")
+                data["name"] = get_xml_element(elm, "RegionName")
             elif elm.tag == "District":
                 data["type"] = "D"
-                data["parent"] = elm.find("RegionCode").text.strip()
-                data["code"] = elm.find("DistrictCode").text.strip()
-                data["name"] = elm.find("DistrictName").text.strip()
+                data["parent"] = get_xml_element(elm, "RegionCode")
+                data["code"] = get_xml_element(elm, "DistrictCode")
+                data["name"] = get_xml_element(elm, "DistrictName")
             elif elm.tag == "Municipality":
                 data["type"] = "W"
-                data["parent"] = elm.find("DistrictCode").text.strip()
-                data["code"] = elm.find("MunicipalityCode").text.strip()
-                data["name"] = elm.find("MunicipalityName").text.strip()
+                data["parent"] = get_xml_element(elm, "DistrictCode")
+                data["code"] = get_xml_element(elm, "MunicipalityCode")
+                data["name"] = get_xml_element(elm, "MunicipalityName")
             elif elm.tag == "Village":
                 data["type"] = "V"
-                data["parent"] = elm.find("MunicipalityCode").text.strip()
-                data["code"] = elm.find("VillageCode").text.strip()
-                data["name"] = elm.find("VillageName").text.strip()
-                data["male_population"] = elm.find("MalePopulation").text.strip()
-                data["female_population"] = elm.find("FemalePopulation").text.strip()
-                data["other_population"] = elm.find("OtherPopulation").text.strip()
-                data["families"] = elm.find("Families").text.strip()
+                data["parent"] = get_xml_element(elm, "MunicipalityCode")
+                data["code"] = get_xml_element(elm, "VillageCode")
+                data["name"] = get_xml_element(elm, "VillageName")
+                data["male_population"] = get_xml_element(elm, "MalePopulation")
+                data["female_population"] = get_xml_element(elm, "FemalePopulation")
+                data["other_population"] = get_xml_element(elm, "OtherPopulation")
+                data["families"] = get_xml_element(elm, "Families")
         except ValueError as exc:
             logger.exception(exc)
             errors.append(f"A field is missing for {elm}")

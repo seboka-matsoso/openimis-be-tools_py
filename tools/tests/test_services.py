@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch, PropertyMock
 from django.test import TestCase
 from unittest import mock
 
-from tools.services import upload_claim, InvalidXMLError
+from tools.services import upload_claim, InvalidXMLError, get_xml_element, get_xml_element_int, InvalidXmlInt
 from xml.etree import ElementTree
 
 
@@ -32,3 +32,31 @@ class UploadClaimsTestCase(TestCase):
                 "User cannot upload claims for health facility WRONG",
                 str(cm.exception),
             )
+
+class GetXmlElement(TestCase):
+    def test_get_xml_element(self):
+        test_xml = ElementTree.fromstring(
+            """
+                <root>
+                    <Exists>Exists</Exists>
+                    <Int>123</Int>
+                    <NotInt>123x</NotInt>
+                    <Float>123.10</Float>
+                    <NotFloat>123$10</NotFloat>
+                </root>
+            """
+        )
+        self.assertEqual("Exists", get_xml_element(test_xml, "Exists"))
+        with self.assertRaises(AttributeError):
+            get_xml_element(test_xml, "NotExists")
+        self.assertEqual("DefaultValue", get_xml_element(test_xml, "NotExists", "DefaultValue"))
+
+        self.assertEqual(123, get_xml_element_int(test_xml, "Int"))
+        with self.assertRaises(AttributeError):
+            get_xml_element_int(test_xml, "IntNotExists")
+        self.assertEqual(456, get_xml_element_int(test_xml, "IntNotExists", 456))
+        with self.assertRaises(InvalidXmlInt):
+            get_xml_element_int(test_xml, "NotInt")
+        with self.assertRaises(InvalidXmlInt):
+            get_xml_element_int(test_xml, "NotInt", 456)
+
