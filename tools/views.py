@@ -3,9 +3,6 @@ import os
 import tempfile
 import xml.etree.ElementTree as ET
 
-from django.core.files.storage import default_storage
-from rest_framework.exceptions import bad_request, APIException
-
 from core.models import Officer
 from core.utils import filter_validity
 from django.core.exceptions import PermissionDenied
@@ -15,10 +12,9 @@ from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext as _
 from django.views.decorators.http import require_http_methods
 from location.models import HealthFacility, Location
-from medical.models import Diagnosis
+from medical.models import Diagnosis, Item, Service
 from rest_framework.decorators import api_view, permission_classes, renderer_classes
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from . import serializers, services, utils
 from .apps import ToolsConfig
@@ -199,6 +195,59 @@ def download_diagnoses(request):
     )
 
 
+@api_view(["GET"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_items_perms,
+        )
+    ]
+)
+@renderer_classes([serializers.ItemsXMLRenderer])
+def download_items(request):
+    """Downloads all medical.Item objects in an XML file.
+
+    The list of exported fields can be modified in serializers.format_items().
+
+    Calling this function is restricted to some users, see ToolsConfig.
+
+    Parameters
+    ----------
+    request : rest_framework.request.Request
+        The request that is asking to download items.
+
+    Returns
+    ----------
+    rest_framework.response.Response
+        The requested data in an XML file.
+
+    """
+    queryset = Item.objects.filter(*filter_validity())
+    data = [serializers.format_items(item) for item in queryset]
+    return Response(
+        data=data,
+        headers={"Content-Disposition": "attachment; filename=items.xml"},
+    )
+
+
+@api_view(["GET"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_services_perms,
+        )
+    ]
+)
+@renderer_classes([serializers.ServicesXMLRenderer])
+def download_services(request):
+    queryset = Service.objects.filter(*filter_validity())
+    data = [serializers.format_services(service) for service in queryset]
+    return Response(
+        data=data,
+        headers={"Content-Disposition": "attachment; filename=services.xml"},
+    )
+
+
 @api_view(["POST"])
 @permission_classes(
     [
@@ -222,6 +271,71 @@ def upload_diagnoses(request):
             request.user, xml=xml, strategy=strategy, dry_run=dry_run
         )
         logger.info(f"Diagnoses upload completed: {result}")
+        return Response(
+            {
+                "success": True,
+                "data": {
+                    "sent": result.sent,
+                    "created": result.created,
+                    "updated": result.updated,
+                    "deleted": result.deleted,
+                    "errors": result.errors,
+                },
+            }
+        )
+    except ET.ParseError as exc:
+        logger.error(exc)
+        return Response(
+            {
+                "success": False,
+                "error": "Malformed XML",
+            }
+        )
+
+
+@api_view(["POST"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_items_perms,
+        )
+    ]
+)
+def upload_items(request):
+    """Uploads an XML file containing medical.Item entries.
+
+    Calling this function is restricted to some users, see ToolsConfig.
+
+    Parameters
+    ----------
+    request : rest_framework.request.Request
+        The request containing all data.
+
+    Returns
+    ------
+    rest_framework.response.Response
+        Represents the number of entries received, with the number of created/updated/deleted
+        medical.Item objects, as well as the list of errors that have occurred while each entry was processed.
+
+    Raises
+    ------
+    ET.ParseError
+        If the structure of the XML file is invalid.
+    """
+    serializer = serializers.DeletableUploadSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    file = serializer.validated_data.get("file")
+    dry_run = serializer.validated_data.get("dry_run")
+    strategy = serializer.validated_data.get("strategy")
+
+    try:
+        logger.info("Uploading medical items (dry_run=%s, strategy=%s)...", dry_run, strategy)
+        xml = utils.sanitize_xml(file)
+        result = services.upload_items(
+            request.user, xml=xml, strategy=strategy, dry_run=dry_run
+        )
+        logger.info("Medical items upload completed: %s", result)
         return Response(
             {
                 "success": True,
