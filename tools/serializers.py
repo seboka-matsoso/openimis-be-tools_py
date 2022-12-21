@@ -176,12 +176,26 @@ def format_items(item):
 
 
 def format_services(service):
+    """
+    Formats a medical.Service object for an XML export.
+    This function lists and formats all the medical.Service fields that will be exported.
+    """
+    pat_cat = service.patient_category
+    adult_cat = pat_cat & PATIENT_CATEGORY_MASK_ADULT
+    minor_cat = pat_cat & PATIENT_CATEGORY_MASK_MINOR
+    male_cat = pat_cat & PATIENT_CATEGORY_MASK_MALE
+    female_cat = pat_cat & PATIENT_CATEGORY_MASK_FEMALE
     return {
         "service_code": service.code,
         "service_name": service.name,
         "service_type": service.type,
-        "service_category": service.category,
-        "service_price": service.price,
         "service_level": service.level,
+        "service_price": service.price,
         "service_care_type": service.care_type,
+        "service_male_category": male_cat,
+        "service_female_category": female_cat if not female_cat else 1,
+        "service_adult_category": adult_cat if not adult_cat else 1,
+        "service_minor_category": minor_cat if not minor_cat else 1,
+        "service_category": service.category,
+        "service_frequency": service.frequency,
     }

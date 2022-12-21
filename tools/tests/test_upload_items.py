@@ -1061,7 +1061,7 @@ class UploadItemsTestCase(TestCase):
         cls.admin_user = create_test_interactive_user(username="testItemsAdmin")
 
     @patch("tools.services.parse_xml_items")
-    def test_upload_items_multiple_insert_dry_run(self, mock_load):
+    def test_upload_items_multiple_insert_dry_run(self, mock_parsing):
         dry_run = True
         strategy = STRATEGY_INSERT
         existing_code = "0001"
@@ -1080,7 +1080,7 @@ class UploadItemsTestCase(TestCase):
             }
         ]
         errors = []
-        mock_load.return_value = raw_items, errors
+        mock_parsing.return_value = raw_items, errors
 
         expected_errors = [
             f"Item '{existing_code}' already exists"
@@ -1097,7 +1097,7 @@ class UploadItemsTestCase(TestCase):
         self.assertEqual(expected, result)
 
     @patch("tools.services.parse_xml_items")
-    def test_upload_items_multiple_update_dry_run(self, mock_load):
+    def test_upload_items_multiple_update_dry_run(self, mock_parsing):
         dry_run = True
         strategy = STRATEGY_UPDATE
         existing_code_1 = "0001"
@@ -1118,7 +1118,7 @@ class UploadItemsTestCase(TestCase):
             },
         ]
         errors = []
-        mock_load.return_value = raw_items, errors
+        mock_parsing.return_value = raw_items, errors
 
         expected_errors = [
             f"Item '{error_code}' does not exist"
@@ -1135,7 +1135,7 @@ class UploadItemsTestCase(TestCase):
         self.assertEqual(expected, result)
 
     @patch("tools.services.parse_xml_items")
-    def test_upload_items_multiple_insert_update_dry_run(self, mock_load):
+    def test_upload_items_multiple_insert_update_dry_run(self, mock_parsing):
         dry_run = True
         strategy = STRATEGY_INSERT_UPDATE
         raw_items = [
@@ -1161,7 +1161,7 @@ class UploadItemsTestCase(TestCase):
             },
         ]
         errors = []
-        mock_load.return_value = raw_items, errors
+        mock_parsing.return_value = raw_items, errors
 
         expected = UploadResult(
             errors=errors,
@@ -1175,7 +1175,7 @@ class UploadItemsTestCase(TestCase):
         self.assertEqual(expected, result)
 
     @patch("tools.services.parse_xml_items")
-    def test_upload_items_multiple_insert_update_delete_dry_run(self, mock_load):
+    def test_upload_items_multiple_insert_update_delete_dry_run(self, mock_parsing):
         dry_run = True
         strategy = STRATEGY_INSERT_UPDATE_DELETE
         raw_items = [
@@ -1201,9 +1201,9 @@ class UploadItemsTestCase(TestCase):
             },
         ]
         errors = []
-        mock_load.return_value = raw_items, errors
+        mock_parsing.return_value = raw_items, errors
 
-        before_total_items = Item.objects.count()
+        before_total_items = Item.objects.filter(*filter_validity()).count()
         expected_deleted = before_total_items - 2
 
         expected = UploadResult(
@@ -1218,7 +1218,7 @@ class UploadItemsTestCase(TestCase):
         self.assertEqual(expected, result)
 
     @patch("tools.services.parse_xml_items")
-    def test_upload_items_multiple_insert(self, mock_load):
+    def test_upload_items_multiple_insert(self, mock_parsing):
         # setup - preparing data that will be inserted
         dry_run = False
         strategy = STRATEGY_INSERT
@@ -1261,7 +1261,7 @@ class UploadItemsTestCase(TestCase):
             }
         ]
         errors = []
-        mock_load.return_value = raw_items, errors
+        mock_parsing.return_value = raw_items, errors
 
         expected_errors = [
             f"Item '{existing_code}' already exists"
@@ -1273,11 +1273,11 @@ class UploadItemsTestCase(TestCase):
             updated=0,
             deleted=0,
         )
-        total_items_before = Item.objects.count()
+        total_items_before = Item.objects.filter(*filter_validity()).count()
 
         # Inserting
         result = upload_items(self.admin_user, "xml", strategy, dry_run)
-        total_items_after = Item.objects.count()
+        total_items_after = Item.objects.filter(*filter_validity()).count()
 
         self.assertEqual(expected, result)
         self.assertEqual(total_items_before + 2, total_items_after)
@@ -1289,7 +1289,7 @@ class UploadItemsTestCase(TestCase):
         new_item_2.delete()
 
     @patch("tools.services.parse_xml_items")
-    def test_upload_items_multiple_update(self, mock_load):
+    def test_upload_items_multiple_update(self, mock_parsing):
         # setup - creating items that will be updated
         new_code_1 = "CODE_1"
         old_name_1 = "new item old name 0001"
@@ -1344,7 +1344,7 @@ class UploadItemsTestCase(TestCase):
             }
         ]
         errors = []
-        mock_load.return_value = raw_items, errors
+        mock_parsing.return_value = raw_items, errors
         expected_errors = [
             f"Item '{non_existing_code}' does not exist"
         ]
@@ -1374,7 +1374,7 @@ class UploadItemsTestCase(TestCase):
         db_new_item_2.delete()
 
     @patch("tools.services.parse_xml_items")
-    def test_upload_items_multiple_insert_update(self, mock_load):
+    def test_upload_items_multiple_insert_update(self, mock_parsing):
         # setup - creating items that will be updated
         update_code_1 = "U_1"
         old_name_1 = "update item old name 0001"
@@ -1440,7 +1440,7 @@ class UploadItemsTestCase(TestCase):
             },
         ]
         errors = []
-        mock_load.return_value = raw_items, errors
+        mock_parsing.return_value = raw_items, errors
         expected = UploadResult(
             errors=errors,
             sent=4,
@@ -1473,7 +1473,7 @@ class UploadItemsTestCase(TestCase):
         db_insert_item_2.delete()
 
     @patch("tools.services.parse_xml_items")
-    def test_upload_items_multiple_insert_update_delete(self, mock_load):
+    def test_upload_items_multiple_insert_update_delete(self, mock_parsing):
         # setup - fetching initial DB items in order not to delete them
         all_items = Item.objects.filter(*filter_validity()).all()
         items_to_not_delete = []
@@ -1543,7 +1543,7 @@ class UploadItemsTestCase(TestCase):
         ]
         raw_items = new_items + items_to_not_delete
         errors = []
-        mock_load.return_value = raw_items, errors
+        mock_parsing.return_value = raw_items, errors
 
         total_updated = len(items_to_not_delete) + 1
         total_sent = total_updated + 2
