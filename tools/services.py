@@ -13,6 +13,7 @@ from itertools import chain
 
 from contribution.models import Premium
 from core.utils import filter_validity
+from django.db.models import Manager
 from django.db.models.query_utils import Q
 from tools.constants import (
     STRATEGY_INSERT,
@@ -60,6 +61,35 @@ class UploadResult:
     updated: int = 0
     deleted: int = 0
 
+@dataclass
+class UploadSimpleDataContext:
+    """Represents the required information for uploading data from an XML file.
+
+    Attributes
+    ----------
+    parsed_entries : List[dict]
+        List of entries parsed from the XML file.
+    parsing_errors : List[str]
+        List of errors that happened during the entries parsing.
+    object_manager : Manager
+        Model Manager class of the object type that is going to be uploaded.
+    log_string_sg : str
+        Representation of the object type that is going to be uploaded, singular form.
+    log_string_pl : str
+        Representation of the object type that is going to be uploaded, plural form.
+    strategy : str
+        The requested strategy for the data upload.
+    dry_run : bool
+        Determines whether this is a dry run (test run) or not.
+    """
+    parsed_entries: List
+    parsing_errors: List
+    object_manager: Manager
+    log_string_sg: str
+    log_string_pl: str
+    strategy: str = STRATEGY_INSERT
+    dry_run: bool = False
+
 
 def load_diagnoses_xml(xml):
     result = []
@@ -96,7 +126,7 @@ def parse_xml_items(xml):
     and calls `parse_optional_item_fields` for parsing the optional fields.
 
     This function does not create medical.Items, but dictionaries with all fields and values
-    that be used to create items.
+    that can be used to create items.
 
     This function checks that the data matches the various field constraints specified in the medical.Item model.
     If some data do not match these constraints, if a mandatory field is missing or if there is any error
@@ -110,8 +140,7 @@ def parse_xml_items(xml):
     Returns
     ------
     result : list[dict]
-        A structure that represents the upload process result, with the number of
-        entries received, the number of created/updated/deleted Items.
+        A list of dictionaries that represent each parsed item.
 
     errors : list[str]
         The list of errors. An empty list means that there was no error.
@@ -267,8 +296,7 @@ def parse_optional_item_fields(elm, code):
     Returns
     ------
     optional_values : list[dict]
-        A structure that represents the upload process result, with the number of
-        entries received, the number of created/updated/deleted Items. If `error_message` is not
+        A dictionary that represents the item's optional values. If `error_message` is not
         an empty string, this value should be disregarded.
 
     error_message : str
@@ -277,10 +305,6 @@ def parse_optional_item_fields(elm, code):
     optional_values = {}
     error_message = ""
     try:
-        raw_package = elm.find("ItemPackage")
-        raw_frequency = elm.find("ItemFrequency")
-
-        # can't do 'if raw_quantity' only because of Element.__bool__ (see doc)
         quantity = get_xml_element_float(elm, "ItemQuantity", None)
         if quantity is not None:
             optional_values["quantity"] = quantity
@@ -305,66 +329,172 @@ def parse_optional_item_fields(elm, code):
     return optional_values, error_message
 
 
-def upload_diagnoses(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
-    logger.info("Uploading diagnoses with strategy={strategy} & dry_run={dry_run}")
-    try:
-        raw_diagnoses, errors = load_diagnoses_xml(xml)
-    except Exception as exc:
-        raise InvalidXMLError("XML file is invalid.") from exc
+def parse_xml_services(xml):
+    """Parses medical.Services in an XML file.
 
-    result = UploadResult(errors=errors)
-    ids = []
-    db_diagnoses = {
-        x.code: x
-        for x in Diagnosis.objects.filter(
-            code__in=[x["code"] for x in raw_diagnoses], *filter_validity()
-        )
-    }
-    for diagnosis in raw_diagnoses:
-        logger.debug(f"Processing {diagnosis['code']}...")
-        existing = db_diagnoses.get(diagnosis["code"], None)
-        result.sent += 1
-        ids.append(diagnosis["code"])
+    This function parses all the mandatory fields of a medical.Service
+    and calls `parse_optional_service_fields` for parsing the optional fields.
 
-        if existing and strategy == STRATEGY_INSERT:
-            result.errors.append(f"{existing.code} already exists")
+    This function does not create medical.Services, but dictionaries with all fields and values
+    that can be used to create services.
+
+    This function checks that the data matches the various field constraints specified in the medical.Service model.
+    If some data do not match these constraints, if a mandatory field is missing or if there is any error
+    while the data is being parsed, an error message is added and the currently parsed service is discarded.
+
+    Parameters
+    ----------
+    xml : xml.etree.ElementTree.ElementTree
+        The parsed XML file.
+
+    Returns
+    ------
+    result : list[dict]
+        A list of dictionaries that represent each parsed service.
+
+    errors : list[str]
+        The list of errors. An empty list means that there was no error.
+    """
+    result = []
+    errors = []
+    root = xml.getroot()
+
+    for elm in root.findall("Service"):
+        try:
+            # Item mandatory fields
+            code = get_xml_element(elm, "ServiceCode")
+            name = get_xml_element(elm, "ServiceName")
+            service_type = get_xml_element(elm, "ServiceType").upper()
+            level = get_xml_element(elm, "ServiceLevel").upper()
+            price = get_xml_element_float(elm, "ServicePrice")
+            care_type = get_xml_element(elm, "ServiceCareType").upper()
+            # The xxx_cat fields = Item.patient_category
+            adult_cat = get_xml_element_int(elm, "ServiceAdultCategory")
+            minor_cat = get_xml_element_int(elm, "ServiceMinorCategory")
+            male_cat = get_xml_element_int(elm, "ServiceMaleCategory")
+            female_cat = get_xml_element_int(elm, "ServiceFemaleCategory")
+
+        except InvalidXmlInt as parsing_ex:
+            errors.append(f"Service '{code}': patient categories are invalid. Please use '0' for no or '1' for yes")
             continue
-        elif not existing and strategy == STRATEGY_UPDATE:
-            result.errors.append(f"{diagnosis['code']} does not exist")
+        except InvalidXmlFloat as parsing_ex:
+            errors.append(f"Service '{code}': price is invalid. Please use '.' "
+                          f"as decimal separator, without any currency symbol.")
+            continue
+        except AttributeError as missing_value_ex:
+            errors.append(
+                f"Service is missing one of the following fields: code, name, type, level, price, care type, "
+                f"male category, female category, adult category or minor category.")
             continue
 
-        if strategy == STRATEGY_INSERT:
-            if not dry_run:
-                Diagnosis.objects.create(audit_user_id=user.id_for_audit, **diagnosis)
-            result.created += 1
-
+        categories = [adult_cat, minor_cat, male_cat, female_cat]
+        # No parsing error - now checking the model constraints
+        if any([res["code"].lower() == code.lower() for res in result]):
+            errors.append(f"Service '{code}': exists multiple times in the list")
+        elif len(code) < 1 or len(code) > 6:
+            errors.append(f"Service '{code}': code is invalid. Must be between 1 and 6 characters")
+        elif len(name) < 1 or len(name) > 100:
+            errors.append(f"Service '{code}': name is invalid ('{name}'). Must be between 1 and 100 characters")
+        elif service_type not in Service.TYPE_VALUES:
+            errors.append(f"Service '{code}': type is invalid ('{service_type}'). "
+                          f"Must be one of the following: {Service.TYPE_VALUES}")
+        elif level not in Service.LEVEL_VALUES:
+            errors.append(f"Service '{code}': level is invalid ('{level}'). "
+                          f"Must be one of the following: {Service.LEVEL_VALUES}")
+        elif care_type not in ItemOrService.CARE_TYPE_VALUES:
+            errors.append(f"Service '{code}': care type is invalid ('{care_type}'). "
+                          f"Must be one of the following: {ItemOrService.CARE_TYPE_VALUES}")
+        elif any([cat not in VALID_PATIENT_CATEGORY_INPUTS for cat in categories]):
+            errors.append(f"Service '{code}': patient categories are invalid. "
+                          f"Must be one of the following: {VALID_PATIENT_CATEGORY_INPUTS}")
         else:
-            if existing:
-                if not dry_run:
-                    existing.save_history()
-                    [setattr(existing, key, diagnosis[key]) for key in diagnosis]
-                    existing.save()
-                result.updated += 1
+            # No constraint error found
+            optional_fields, optional_error = parse_optional_service_fields(elm, code)
+
+            if optional_error:
+                errors.append(optional_error)
             else:
-                if not dry_run:
-                    existing = Diagnosis.objects.create(
-                        audit_user_id=user.id_for_audit, **diagnosis
-                    )
-                result.created += 1
+                # No error found in the optional fields either, the service can be safely uploaded
 
-    if strategy == STRATEGY_INSERT_UPDATE_DELETE:
-        # We can take all diagnosis (even the ones linked to a claim) since we only archive it.
-        qs = Diagnosis.objects.filter(~Q(code__in=ids)).filter(validity_to__isnull=True)
-        print(qs.all())
-        result.deleted = len(qs)
-        logger.info(f"Delete {result.deleted} diagnoses")
-        if not dry_run:
-            qs.update(
-                validity_to=datetime.datetime.now(), audit_user_id=user.id_for_audit
-            )
+                # Using masks to calculate the SmallInteger value that is going to be stored for patient_category
+                category = 0
+                if male_cat:
+                    category = category | PATIENT_CATEGORY_MASK_MALE
+                if female_cat:
+                    category = category | PATIENT_CATEGORY_MASK_FEMALE
+                if adult_cat:
+                    category = category | PATIENT_CATEGORY_MASK_ADULT
+                if minor_cat:
+                    category = category | PATIENT_CATEGORY_MASK_MINOR
 
-    logger.debug(f"Finished processing of diagnoses: {result}")
-    return result
+                result.append(dict(code=code, name=name, type=service_type, level=level, price=price,
+                                   care_type=care_type, patient_category=category, **optional_fields))
+
+    return result, errors
+
+
+def parse_optional_service_fields(elm, code):
+    """Parses optional medical.Service fields in an Element.
+
+    This function parses all the optional fields of a medical.Service.
+
+    If any parsing error or constraint error is found in the optional fields,
+    the returned `error_message` value will not be an empty string. In that case,
+    the returned `optional_values` value should be disregarded.
+
+    Parameters
+    ----------
+    elm : xml.etree.ElementTree.Element
+        The Element that contains the optional fields.
+
+    code : str
+        The service's code.
+
+    Returns
+    ------
+    optional_values : list[dict]
+        A dictionary that represents the Service's optional values. If `error_message` is not
+        an empty string, this value should be disregarded.
+
+    error_message : str
+        An optional error message. An empty string means that there was no error.
+    """
+    optional_values = {}
+    error_message = ""
+    try:
+        frequency = get_xml_element_int(elm, "ServiceFrequency", None)
+        if frequency is not None:
+            optional_values["frequency"] = frequency
+
+        raw_category = get_xml_element(elm, "ServiceCategory", None)
+        if raw_category is not None:
+            category = raw_category.upper()
+            if category not in Service.CATEGORY_VALUES:
+                error_message = f"Service '{code}': category is invalid ('{category}'). " \
+                                f"Must be one of the following: {Service.CATEGORY_VALUES}"
+            else:
+                optional_values["category"] = category
+
+        return optional_values, error_message
+
+    except ValueError as parsing_ex:
+        error_message = f"Service '{code}': frequency is invalid. Please enter a non decimal number of days."
+
+        return optional_values, error_message
+
+
+def upload_diagnoses(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
+    raw_diagnoses, errors = load_diagnoses_xml(xml)
+    context = UploadSimpleDataContext(
+        strategy=strategy,
+        dry_run=dry_run,
+        parsed_entries=raw_diagnoses,
+        parsing_errors=errors,
+        object_manager=Diagnosis.objects,
+        log_string_sg="Diagnosis",
+        log_string_pl="diagnoses",
+    )
+    return upload_simple_data(user, context)
 
 
 def upload_items(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
@@ -395,64 +525,144 @@ def upload_items(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
 
     Returns
     ------
-    result : UploadResult
+    UploadResult
         A structure that represents the upload process result, with the number of
         entries received, the number of created/updated/deleted Items and the list of errors.
     """
-    # TODO: refactor uploads and use this updated and fixed version as a base for all XML uploads
-    logger.info("Uploading medical items with strategy=%s & dry_run=%s", strategy, dry_run)
-
     raw_items, errors = parse_xml_items(xml)
-    result = UploadResult(errors=errors)
+    context = UploadSimpleDataContext(
+        strategy=strategy,
+        dry_run=dry_run,
+        parsed_entries=raw_items,
+        parsing_errors=errors,
+        object_manager=Item.objects,
+        log_string_sg="Item",
+        log_string_pl="items",
+    )
+    return upload_simple_data(user, context)
+
+
+def upload_simple_data(user, context):
+    """Uploads various types of data.
+
+    This function can process any type of "simple" data import (medical.Item, medical.Service
+    and medical.Diagnosis) that do not require extra processing, such as location.Location.
+
+    This function will create new entries, update existing ones and/or delete existing ones.
+
+
+    Parameters
+    ----------
+    user : core.models.User
+        The User that requested the data upload.
+
+    context : UploadSimpleDataContext
+        The upload context containing all the necessary information about the upload.
+
+    Returns
+    ------
+    result : UploadResult
+        A structure that represents the upload process result, with the number of
+        entries received, the number of created/updated/deleted entries and the list of errors.
+    """
+    logger.info("Uploading %s with strategy=%s & dry_run=%s", context.log_string_pl,
+                context.strategy, context.dry_run)
+
+    result = UploadResult(errors=context.parsing_errors)
     ids = []
-    # Fetches the valid DB items that already exist (with the same codes as the ones in the XML file)
-    db_items = {
+    # Fetches the valid DB entries that already exist (with the same codes as the ones in the XML file)
+    db_entries = {
         x.code: x
-        for x in Item.objects.filter(
-            code__in=[x["code"] for x in raw_items], *filter_validity()
+        for x in context.object_manager.filter(
+            code__in=[x["code"] for x in context.parsed_entries], *filter_validity()
         )
     }
 
-    for item in raw_items:
-        logger.debug("Processing %s...", item['code'])
-        existing = db_items.get(item["code"], None)
+    for entry in context.parsed_entries:
+        logger.debug("Processing %s...", entry['code'])
+        existing = db_entries.get(entry["code"], None)
         result.sent += 1
-        ids.append(item["code"])
+        ids.append(entry["code"])
 
-        if existing and strategy == STRATEGY_INSERT:
-            result.errors.append(f"Item '{existing.code}' already exists")
+        if existing and context.strategy == STRATEGY_INSERT:
+            result.errors.append(f"{context.log_string_sg} '{existing.code}' already exists")
             continue
-        elif not existing and strategy == STRATEGY_UPDATE:
-            result.errors.append(f"Item '{item['code']}' does not exist")
+        elif not existing and context.strategy == STRATEGY_UPDATE:
+            result.errors.append(f"{context.log_string_sg} '{entry['code']}' does not exist")
             continue
 
-        if strategy == STRATEGY_INSERT:
-            if not dry_run:
-                Item.objects.create(audit_user_id=user.id_for_audit, **item)
+        if context.strategy == STRATEGY_INSERT:
+            if not context.dry_run:
+                context.object_manager.create(audit_user_id=user.id_for_audit, **entry)
             result.created += 1
 
         else:
             if existing:
-                if not dry_run:
+                if not context.dry_run:
                     existing.save_history()
-                    [setattr(existing, key, item[key]) for key in item]
+                    [setattr(existing, key, entry[key]) for key in entry]
                     existing.save()
                 result.updated += 1
             else:
-                if not dry_run:
-                    Item.objects.create(audit_user_id=user.id_for_audit, **item)
+                if not context.dry_run:
+                    context.object_manager.create(audit_user_id=user.id_for_audit, **entry)
                 result.created += 1
 
-    if strategy == STRATEGY_INSERT_UPDATE_DELETE:
-        # Fetches all the items whose code is not in the XML file -> the ones that should be deleted
-        qs = Item.objects.filter(~Q(code__in=ids)).filter(validity_to__isnull=True)
+    if context.strategy == STRATEGY_INSERT_UPDATE_DELETE:
+        # Fetches all the entries whose code is not in the XML file -> the ones that should be deleted
+        qs = context.object_manager.filter(~Q(code__in=ids)).filter(validity_to__isnull=True)
         result.deleted = len(qs)
-        logger.info("Delete %s items", result.deleted)
-        if not dry_run:
+        logger.info("Deleted %s %s", result.deleted, context.log_string_pl)
+        if not context.dry_run:
             qs.update(validity_to=datetime.now(), audit_user_id=user.id_for_audit)
 
-    logger.debug("Finished processing of items: %s", result)
+    logger.debug("Finished processing of %s: %s", context.log_string_pl, result)
     return result
+
+
+def upload_services(user, xml, strategy=STRATEGY_INSERT, dry_run=False):
+    """Uploads an XML file containing medical.Service entries.
+
+    There are 4 strategies for uploading Services:
+        - INSERT: inserts all the entries that do not exist yet
+        - UPDATE: updates all the entries that already exist
+        - INSERT_UPDATE: inserts all the entries that do not exist yet and updates the others
+        - INSERT_UPDATE_DELETE: inserts all the entries that do not exist yet, updates the ones that
+        already exist and deletes the remaining ones
+
+    This function can make dry runs to test the XML file upload and check if there are any errors.
+
+    Parameters
+    ----------
+    user : core.models.User
+        The User that requested the data upload.
+
+    xml : xml.etree.ElementTree.ElementTree
+        The parsed XML file.
+
+    strategy : str
+        The requested strategy for the data upload.
+
+    dry_run : bool
+        Determines whether this is a dry run (test run) or not.
+
+    Returns
+    ------
+    UploadResult
+        A structure that represents the upload process result, with the number of
+        entries received, the number of created/updated/deleted Services and the list of errors.
+    """
+    raw_services, errors = parse_xml_services(xml)
+    context = UploadSimpleDataContext(
+        strategy=strategy,
+        dry_run=dry_run,
+        parsed_entries=raw_services,
+        parsing_errors=errors,
+        object_manager=Service.objects,
+        log_string_sg="Service",
+        log_string_pl="services",
+    )
+    return upload_simple_data(user, context)
 
 
 def load_locations_xml(xml):
