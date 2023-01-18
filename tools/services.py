@@ -8,6 +8,7 @@ import pyzipper
 from core import PATIENT_CATEGORY_MASK_MALE, PATIENT_CATEGORY_MASK_FEMALE, PATIENT_CATEGORY_MASK_ADULT, \
     PATIENT_CATEGORY_MASK_MINOR
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import connection
 from itertools import chain
 
@@ -60,6 +61,7 @@ class UploadResult:
     created: int = 0
     updated: int = 0
     deleted: int = 0
+
 
 @dataclass
 class UploadSimpleDataContext:
@@ -1628,3 +1630,26 @@ def upload_feedbacks(archive, user):
                 db_claim.feedback_available = True
                 db_claim.save()
             feedback_saved.append(feedback)
+
+
+def validate_imported_item_row(row):
+    # TODO : refactor this function and the code used in validating XML uploads
+    categories = [row["adult_cat"], row["minor_cat"], row["male_cat"], row["female_cat"]]
+    if len(row["code"]) < 1 or len(row["code"]) > 6:
+        raise ValidationError(f"Item '{row['code']}': code is invalid. Must be between 1 and 6 characters")
+    elif len(row["name"]) < 1 or len(row["name"]) > 100:
+        raise ValidationError(f"Item '{row['code']}': name is invalid ('{row['name']}'). "
+                              f"Must be between 1 and 100 characters")
+    elif row["type"] not in Item.TYPE_VALUES:
+        raise ValidationError(f"Item '{row['code']}': type is invalid ('{row['type']}'). "
+                              f"Must be one of the following: {Item.TYPE_VALUES}")
+    elif row["care_type"] not in ItemOrService.CARE_TYPE_VALUES:
+        raise ValidationError(f"Item '{row['code']}': care type is invalid ('{row['care_type']}'). "
+                              f"Must be one of the following: {ItemOrService.CARE_TYPE_VALUES}")
+    elif any([cat not in VALID_PATIENT_CATEGORY_INPUTS for cat in categories]):
+        raise ValidationError(f"Item '{row['code']}': patient categories are invalid. "
+                              f"Must be one of the following: {VALID_PATIENT_CATEGORY_INPUTS}")
+    elif "package" in row and (row["package"] is not None) and (len(row["package"]) < 1 or len(row["package"]) > 100):
+        raise ValidationError(f"Item '{row['code']}': package is invalid ('{row['package']}'). "
+                              f"Must be between 1 and 255 characters")
+    return

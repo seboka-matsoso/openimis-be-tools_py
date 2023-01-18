@@ -12,9 +12,12 @@ from core.utils import PATIENT_CATEGORY_MASK_ADULT, PATIENT_CATEGORY_MASK_MALE, 
     PATIENT_CATEGORY_MASK_FEMALE
 
 
-class UploadSerializer(serializers.Serializer):
-    dry_run = serializers.BooleanField()
+class FileSerializer(serializers.Serializer):
     file = serializers.FileField(required=True)
+
+
+class UploadSerializer(FileSerializer):
+    dry_run = serializers.BooleanField()
     strategy = serializers.ChoiceField(
         choices=(
             (STRATEGY_INSERT, "Insert only"),

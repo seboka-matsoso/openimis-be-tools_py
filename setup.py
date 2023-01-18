@@ -27,6 +27,7 @@ setup(
         "pyminizip",
         "pyzipper",
         "defusedxml",
+        "django-import-export",
     ],
     classifiers=[
         "Environment :: Web Environment",
