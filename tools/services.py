@@ -121,7 +121,7 @@ def load_diagnoses_xml(xml):
     return result, errors
 
 
-VALID_PATIENT_CATEGORY_INPUTS = [0, 1]
+VALID_PATIENT_CATEGORY_INPUTS = [0, 1, "0", "1"] # added string literals for CSVs (again, CSVs must have a special way to be handled...)
 
 
 def parse_xml_items(xml):
@@ -1652,7 +1652,7 @@ def validate_imported_item_row(row):
     elif any([cat not in VALID_PATIENT_CATEGORY_INPUTS for cat in categories]):
         raise ValidationError(f"Item '{row['code']}': patient categories are invalid. "
                               f"Must be one of the following: {VALID_PATIENT_CATEGORY_INPUTS}")
-    elif "package" in row and (row["package"] is not None) and (len(row["package"]) < 1 or len(row["package"]) > 100):
+    elif "package" in row and (row["package"] is not None) and len(row["package"]) > 255:
         raise ValidationError(f"Item '{row['code']}': package is invalid ('{row['package']}'). "
                               f"Must be between 1 and 255 characters")
     return
