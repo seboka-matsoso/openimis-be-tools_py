@@ -22,6 +22,7 @@ from rest_framework.response import Response
 from . import serializers, services, utils
 from .apps import ToolsConfig
 from .resources import ItemResource
+from .services import return_upload_result_json
 
 logger = logging.getLogger(__name__)
 
@@ -89,19 +90,7 @@ def upload_locations(request):
             request.user, xml=xml, strategy=strategy, dry_run=dry_run
         )
         logger.info(f"Locations upload completed: {result}")
-        return Response(
-            {
-                "success": True,
-                "data": {
-                    "sent": result.sent,
-                    "created": result.created,
-                    "updated": result.updated,
-                    "errors": result.errors,
-                },
-            }
-        )
-    except services.InvalidXMLError as exc:
-        return Response({"success": False, "error": str(exc)})
+        return return_upload_result_json(xml_result=result)
     except ET.ParseError as exc:
         logger.error(exc)
         return Response(
@@ -160,17 +149,7 @@ def upload_health_facilities(request):
             request.user, xml=xml, strategy=strategy, dry_run=dry_run
         )
         logger.info(f"Health facilities upload completed: {result}")
-        return Response(
-            {
-                "success": True,
-                "data": {
-                    "sent": result.sent,
-                    "created": result.created,
-                    "updated": result.updated,
-                    "errors": result.errors,
-                },
-            }
-        )
+        return return_upload_result_json(xml_result=result)
     except ET.ParseError as exc:
         logger.error(exc)
         return Response(
@@ -275,18 +254,7 @@ def upload_diagnoses(request):
             request.user, xml=xml, strategy=strategy, dry_run=dry_run
         )
         logger.info(f"Diagnoses upload completed: {result}")
-        return Response(
-            {
-                "success": True,
-                "data": {
-                    "sent": result.sent,
-                    "created": result.created,
-                    "updated": result.updated,
-                    "deleted": result.deleted,
-                    "errors": result.errors,
-                },
-            }
-        )
+        return return_upload_result_json(xml_result=result)
     except ET.ParseError as exc:
         logger.error(exc)
         return Response(
@@ -317,7 +285,7 @@ def upload_items(request):
 
     Returns
     ------
-    rest_framework.response.Response
+    JsonResponse
         Represents the number of entries received, with the number of created/updated/deleted
         medical.Item objects, as well as the list of errors that have occurred while each entry was processed.
 
@@ -340,18 +308,7 @@ def upload_items(request):
             request.user, xml=xml, strategy=strategy, dry_run=dry_run
         )
         logger.info("Medical items upload completed: %s", result)
-        return Response(
-            {
-                "success": True,
-                "data": {
-                    "sent": result.sent,
-                    "created": result.created,
-                    "updated": result.updated,
-                    "deleted": result.deleted,
-                    "errors": result.errors,
-                },
-            }
-        )
+        return return_upload_result_json(xml_result=result)
     except ET.ParseError as exc:
         logger.error(exc)
         return Response(
@@ -382,7 +339,7 @@ def upload_services(request):
 
     Returns
     ------
-    rest_framework.response.Response
+    JsonResponse
         Represents the number of entries received, with the number of created/updated/deleted
         medical.Service objects, as well as the list of errors that have occurred while each entry was processed.
 
@@ -405,18 +362,7 @@ def upload_services(request):
             request.user, xml=xml, strategy=strategy, dry_run=dry_run
         )
         logger.info("Medical services upload completed: %s", result)
-        return Response(
-            {
-                "success": True,
-                "data": {
-                    "sent": result.sent,
-                    "created": result.created,
-                    "updated": result.updated,
-                    "deleted": result.deleted,
-                    "errors": result.errors,
-                },
-            }
-        )
+        return return_upload_result_json(xml_result=result)
     except ET.ParseError as exc:
         logger.error(exc)
         return Response(
@@ -705,30 +651,24 @@ def import_items(request):
 
     result = item_resource.import_data(dataset, dry_run=True)  # Test the data import
 
-    response_data = {
-        "total_rows_sent": result.total_rows,
-    }
+    success = True
+    errors = []
     logger.info("Import results: total rows received=%s - detail=%s", result.total_rows, result.totals)
 
     if not result.has_errors() and not result.has_validation_errors():
         item_resource.import_data(dataset, dry_run=False)  # Actually import now
-        response_data["result"] = result.totals
     else:
-        response_data["result"] = f"Import failed: {result.totals['error'] + result.totals['invalid']} error(s)"
+        success = False
         if result.has_validation_errors():
-            validation_errors = []
             for invalid_row in result.invalid_rows:
                 logger.error("Invalid row n°%s - %s", invalid_row.number, invalid_row.error.message)
-                validation_errors.append(f"row ({invalid_row.number}) - {invalid_row.error.message}")
-            response_data["validation_errors"] = validation_errors
+                errors.append(f"row ({invalid_row.number}) - {invalid_row.error.message}")
         if result.has_errors():
-            errors = []
             for index, row_error in result.row_errors():
                 logger.error("Error row n°%s", index)
                 for error in row_error:
                     logger.error("Traceback: %s", error.traceback)
                     errors.append(f"row ({index}) - {error.error}")
-            response_data["errors"] = errors
 
     logger.info("End of import process")
-    return JsonResponse(data=response_data)
+    return return_upload_result_json(success=success, other_types_result=result, other_types_errors=errors)
