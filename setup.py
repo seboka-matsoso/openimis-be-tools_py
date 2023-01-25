@@ -27,6 +27,7 @@ setup(
         "pyminizip",
         "pyzipper",
         "defusedxml",
+        "tablib",
         "django-import-export",
     ],
     classifiers=[
