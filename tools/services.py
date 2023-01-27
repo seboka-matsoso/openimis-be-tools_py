@@ -16,6 +16,9 @@ from contribution.models import Premium
 from core.utils import filter_validity
 from django.db.models import Manager
 from django.db.models.query_utils import Q
+from django.http import JsonResponse
+from import_export.results import Result
+
 from tools.constants import (
     STRATEGY_INSERT,
     STRATEGY_INSERT_UPDATE_DELETE,
@@ -118,7 +121,7 @@ def load_diagnoses_xml(xml):
     return result, errors
 
 
-VALID_PATIENT_CATEGORY_INPUTS = [0, 1]
+VALID_PATIENT_CATEGORY_INPUTS = [0, 1, "0", "1"] # added string literals for CSVs (again, CSVs must have a special way to be handled...)
 
 
 def parse_xml_items(xml):
@@ -1649,7 +1652,80 @@ def validate_imported_item_row(row):
     elif any([cat not in VALID_PATIENT_CATEGORY_INPUTS for cat in categories]):
         raise ValidationError(f"Item '{row['code']}': patient categories are invalid. "
                               f"Must be one of the following: {VALID_PATIENT_CATEGORY_INPUTS}")
-    elif "package" in row and (row["package"] is not None) and (len(row["package"]) < 1 or len(row["package"]) > 100):
+    elif "package" in row and (row["package"] is not None) and len(row["package"]) > 255:
         raise ValidationError(f"Item '{row['code']}': package is invalid ('{row['package']}'). "
                               f"Must be between 1 and 255 characters")
     return
+
+
+def return_upload_result_json(success=True, xml_result: UploadResult = None, other_types_result: Result = None,
+                              other_types_errors=None):
+    """Returns a JSON structure containing the result of a data upload.
+
+    The function's purpose is to normalize the different upload process results (XML and other types)
+    in order to provide the frontend with a single data structure.
+
+    This function can only be called with a `xml_result` or a `other_types_result` parameter. If both are provided,
+    or none, this function will raise an exception.
+
+
+    Parameters
+    ----------
+    success : bool
+        Represents the upload success.
+
+    xml_result: UploadResult
+        Represents an XML upload result.
+
+    other_types_result: Result
+        Represents the upload results made with the django-import-export plugin.
+
+    other_types_errors: List
+        Represents the list of errors that happened during data upload with the plugin.
+
+
+    Returns
+    ------
+    JsonResponse
+        A JSON structure that represents the result of a data upload.
+
+
+    Raises
+    ------
+    RuntimeError
+        If both `xml_result` and `other_types_result` are provided, or none of them.
+    """
+    if xml_result is not None and other_types_result is not None:
+        raise RuntimeError("You cannot provide two different types of upload result")
+
+    if xml_result is None and other_types_result is None:
+        raise RuntimeError("You must provide one type of upload result")
+
+    response_data = {
+        "success": success,
+    }
+
+    if xml_result is not None:
+        response_data["data"] = {
+            "sent": xml_result.sent,
+            "created": xml_result.created,
+            "updated": xml_result.updated,
+            "deleted": xml_result.deleted,
+            "skipped": 0,
+            "invalid": 0,
+            "failed": 0,
+        }
+        response_data["errors"] = xml_result.errors
+    elif other_types_result is not None:
+        response_data["data"] = {
+            "sent": other_types_result.total_rows,
+            "created": other_types_result.totals["new"],
+            "updated": other_types_result.totals["update"],
+            "deleted": other_types_result.totals["delete"],
+            "skipped": other_types_result.totals["skip"],
+            "invalid": other_types_result.totals["invalid"],
+            "failed": other_types_result.totals["error"],
+        }
+        response_data["errors"] = other_types_errors
+
+    return JsonResponse(data=response_data)
