@@ -12,6 +12,7 @@ from django.http.response import FileResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext as _
 from django.views.decorators.http import require_http_methods
+from import_export.resources import ModelResource
 from tablib import Dataset
 
 from location.models import HealthFacility, Location
@@ -21,7 +22,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from . import serializers, services, utils
 from .apps import ToolsConfig
-from .resources import ItemResource
+from .resources import ItemResource, ServiceResource
 from .services import return_upload_result_json
 
 logger = logging.getLogger(__name__)
@@ -544,61 +545,12 @@ def _process_upload(request, process_method):
     return JsonResponse({"success": len(errors) == 0, "errors": errors})
 
 
-# TODO : refactor the 4 export_items_xxx functions (could be all merged into a single function, which receives
-# a parameter to determine in which format the items should be exported)
-@api_view(["GET"])
-@permission_classes(
-    [
-        checkUserWithRights(
-            ToolsConfig.registers_items_perms,
-        )
-    ]
-)
-def export_items_csv(request):
-    return export_items(request.user.id_for_audit, CSV)
-
-
-@api_view(["GET"])
-@permission_classes(
-    [
-        checkUserWithRights(
-            ToolsConfig.registers_items_perms,
-        )
-    ]
-)
-def export_items_json(request):
-    return export_items(request.user.id_for_audit, JSON)
-
-
-@api_view(["GET"])
-@permission_classes(
-    [
-        checkUserWithRights(
-            ToolsConfig.registers_items_perms,
-        )
-    ]
-)
-def export_items_xls(request):
-    return export_items(request.user.id_for_audit, XLS)
-
-
-@api_view(["GET"])
-@permission_classes(
-    [
-        checkUserWithRights(
-            ToolsConfig.registers_items_perms,
-        )
-    ]
-)
-def export_items_xlsx(request):
-    return export_items(request.user.id_for_audit, XLSX)
-
-
-# List of tested import formats so far
+# List of supported import/export formats so far
 XLS = "xls"
 XLSX = "xlsx"
 CSV = "csv"
 JSON = "json"
+SUPPORTED_FORMATS = [XLS, XLSX, CSV, JSON]
 
 # other types: https://stackoverflow.com/a/50860387
 CONTENT_TYPES = {
@@ -609,7 +561,23 @@ CONTENT_TYPES = {
 }
 
 
-def export_items(user_id, data_type):
+@api_view(["GET"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_items_perms,
+        )
+    ]
+)
+def export_items(request):
+    export_format = request.GET.get("file_format", "unknown")
+    if export_format in SUPPORTED_FORMATS:
+        return process_export_items(request.user.id_for_audit, export_format)
+    else:
+        return JsonResponse({"error": "Unknown export format."}, status=400)
+
+
+def process_export_items(user_id, data_type):
     logger.info("User (audit id %s) requested export of medical items in %s", user_id, data_type)
     item_resource = ItemResource(user_id)
     query_set = Item.objects.filter(*filter_validity()).order_by("code")
@@ -649,14 +617,77 @@ def import_items(request):
     else:
         dataset.load(file.read())
 
-    result = item_resource.import_data(dataset, dry_run=True)  # Test the data import
+    return process_import_items_services(item_resource, dataset)
+
+
+@api_view(["GET"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_services_perms,
+        )
+    ]
+)
+def export_services(request):
+    export_format = request.GET.get("file_format", "unknown")
+    if export_format in SUPPORTED_FORMATS:
+        return process_export_services(request.user.id_for_audit, export_format)
+    else:
+        return JsonResponse({"error": "Unknown export format."}, status=400)
+
+
+def process_export_services(user_id, data_type):
+    logger.info("User (audit id %s) requested export of medical services in %s", user_id, data_type)
+    service_resource = ServiceResource(user_id)
+    query_set = Service.objects.filter(*filter_validity()).order_by("code")
+    dataset = service_resource.export(query_set)
+    datasets = {
+        XLS: dataset.xls,
+        CSV: dataset.csv,
+        JSON: dataset.json,
+        XLSX: dataset.xlsx,
+    }
+    response = HttpResponse(datasets[data_type], content_type=CONTENT_TYPES[data_type])
+    response['Content-Disposition'] = f'attachment; filename="services.{data_type}"'
+    return response
+
+
+@api_view(["POST"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_services_perms,
+        )
+    ]
+)
+def import_services(request):
+    serializer = serializers.FileSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    file = serializer.validated_data.get("file")
+    user_id = request.user.id_for_audit
+    logger.info("User (audit id %s) requested import of medical services", user_id)
+
+    service_resource = ServiceResource(user_id)
+    dataset = Dataset()
+
+    if CONTENT_TYPES[CSV] == file.content_type:
+        dataset.load(file.read().decode(), format="csv")  # the CSV file must be read differently, otherwise it crashes
+    else:
+        dataset.load(file.read())
+
+    return process_import_items_services(service_resource, dataset)
+
+
+def process_import_items_services(resource: ModelResource, dataset: Dataset):
+    result = resource.import_data(dataset, dry_run=True)  # Test the data import
 
     success = True
     errors = []
     logger.info("Import results: total rows received=%s - detail=%s", result.total_rows, result.totals)
 
     if not result.has_errors() and not result.has_validation_errors():
-        item_resource.import_data(dataset, dry_run=False)  # Actually import now
+        resource.import_data(dataset, dry_run=False)  # Actually import now
     else:
         success = False
         if result.has_validation_errors():

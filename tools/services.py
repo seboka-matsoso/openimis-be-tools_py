@@ -606,6 +606,8 @@ def upload_simple_data(user, context):
                 if not context.dry_run:
                     existing.save_history()
                     [setattr(existing, key, entry[key]) for key in entry]
+                    from core import datetime
+                    existing.validity_from = datetime.datetime.now()
                     existing.save()
                 result.updated += 1
             else:
@@ -619,7 +621,8 @@ def upload_simple_data(user, context):
         result.deleted = len(qs)
         logger.info("Deleted %s %s", result.deleted, context.log_string_pl)
         if not context.dry_run:
-            qs.update(validity_to=datetime.now(), audit_user_id=user.id_for_audit)
+            from core import datetime
+            qs.update(validity_to=datetime.datetime.now(), audit_user_id=user.id_for_audit)
 
     logger.debug("Finished processing of %s: %s", context.log_string_pl, result)
     return result
@@ -1641,20 +1644,38 @@ def validate_imported_item_row(row):
     if len(row["code"]) < 1 or len(row["code"]) > 6:
         raise ValidationError(f"Item '{row['code']}': code is invalid. Must be between 1 and 6 characters")
     elif len(row["name"]) < 1 or len(row["name"]) > 100:
-        raise ValidationError(f"Item '{row['code']}': name is invalid ('{row['name']}'). "
-                              f"Must be between 1 and 100 characters")
+        raise ValidationError(f"Item '{row['code']}': name is invalid. Must be between 1 and 100 characters")
     elif row["type"] not in Item.TYPE_VALUES:
-        raise ValidationError(f"Item '{row['code']}': type is invalid ('{row['type']}'). "
-                              f"Must be one of the following: {Item.TYPE_VALUES}")
+        raise ValidationError(f"Item '{row['code']}': type is invalid. Must be one of the following: {Item.TYPE_VALUES}")
     elif row["care_type"] not in ItemOrService.CARE_TYPE_VALUES:
-        raise ValidationError(f"Item '{row['code']}': care type is invalid ('{row['care_type']}'). "
-                              f"Must be one of the following: {ItemOrService.CARE_TYPE_VALUES}")
+        raise ValidationError(f"Item '{row['code']}': care type is invalid. Must be one of the following: {ItemOrService.CARE_TYPE_VALUES}")
     elif any([cat not in VALID_PATIENT_CATEGORY_INPUTS for cat in categories]):
-        raise ValidationError(f"Item '{row['code']}': patient categories are invalid. "
-                              f"Must be one of the following: {VALID_PATIENT_CATEGORY_INPUTS}")
+        raise ValidationError(f"Item '{row['code']}': patient categories are invalid. Must be one of the following: [0, 1]")
     elif "package" in row and (row["package"] is not None) and len(row["package"]) > 255:
-        raise ValidationError(f"Item '{row['code']}': package is invalid ('{row['package']}'). "
-                              f"Must be between 1 and 255 characters")
+        raise ValidationError(f"Item '{row['code']}': package is invalid. Must be maximum 255 characters")
+    return
+
+
+def validate_imported_service_row(row):
+    # TODO : refactor this function and the code used in validating XML uploads
+    categories = [row["adult_cat"], row["minor_cat"], row["male_cat"], row["female_cat"]]
+    if len(row["code"]) < 1 or len(row["code"]) > 6:
+        raise ValidationError(f"Service '{row['code']}': code is invalid. Must be between 1 and 6 characters")
+    elif len(row["name"]) < 1 or len(row["name"]) > 100:
+        raise ValidationError(f"Service '{row['code']}': name is invalid. Must be between 1 and 100 characters")
+    elif row["type"] not in Service.TYPE_VALUES:
+        raise ValidationError(f"Service '{row['code']}': type is invalid. Must be one of the following: {Service.TYPE_VALUES}")
+    elif row["level"] not in Service.LEVEL_VALUES:
+        raise ValidationError(f"Service '{row['code']}': level is invalid. Must be one of the following: {Service.LEVEL_VALUES}")
+    elif row["care_type"] not in ItemOrService.CARE_TYPE_VALUES:
+        raise ValidationError(f"Service '{row['code']}': care type is invalid. Must be one of the following: {ItemOrService.CARE_TYPE_VALUES}")
+    elif any([cat not in VALID_PATIENT_CATEGORY_INPUTS for cat in categories]):
+        raise ValidationError(f"Service '{row['code']}': patient categories are invalid. Must be one of the following: [0, 1]")
+    elif "category" in row and \
+            row["category"] is not None and \
+            len(row["category"]) and \
+            row["category"] not in Service.CATEGORY_VALUES:
+        raise ValidationError(f"Service '{row['code']}': category is invalid. Must be one of the following: {Service.CATEGORY_VALUES}")
     return
 
 
