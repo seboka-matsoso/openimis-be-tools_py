@@ -17,6 +17,7 @@ from tablib import Dataset
 
 from location.models import HealthFacility, Location
 from medical.models import Diagnosis, Item, Service
+from location.apps import DEFAULT_CFG as LOCATION_DEFAULT_CFG
 from rest_framework.decorators import api_view, permission_classes, renderer_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -56,7 +57,7 @@ def download_locations(request):
         for child in children:
             if child.type == "D":
                 data["Districts"].append(serializers.format_location(child))
-            elif child.type == "M":
+            elif child.type == LOCATION_DEFAULT_CFG['location_types'][2]:
                 data["Municipalities"].append(serializers.format_location(child))
             elif child.type == "V":
                 data["Villages"].append(serializers.format_location(child))

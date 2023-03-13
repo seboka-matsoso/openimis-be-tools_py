@@ -10,6 +10,7 @@ from rest_framework import serializers
 
 from core.utils import PATIENT_CATEGORY_MASK_ADULT, PATIENT_CATEGORY_MASK_MALE, PATIENT_CATEGORY_MASK_MINOR, \
     PATIENT_CATEGORY_MASK_FEMALE
+from location.apps import DEFAULT_CFG as LOCATION_DEFAULT_CFG
 
 
 class FileSerializer(serializers.Serializer):
@@ -126,7 +127,7 @@ def format_location(location):
                 "district_name": location.name,
             }
         }
-    elif location.type == "M":
+    elif location.type == LOCATION_DEFAULT_CFG['location_types'][2]:
         return {
             "municipality": {
                 "district_code": location.parent.code,
