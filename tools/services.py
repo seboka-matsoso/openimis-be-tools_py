@@ -807,8 +807,8 @@ HF_FIELDS_MAP = {
     "Email": "email",
     "CareType": "care_type",
     "AccountCode": "acc_code",
-    "ItemPriceListName": "items_pricelist_name",
-    "ServicePriceListName": "services_pricelist_name",
+    "ItemsPricelistName": "items_pricelist_name",
+    "ServicesPricelistName": "services_pricelist_name",
 }
 
 
@@ -902,11 +902,16 @@ def upload_health_facilities(user, xml, strategy=STRATEGY_INSERT, dry_run=False)
         if "services_pricelist_name" in facility:
             facility["services_pricelist_id"] = get_pricelist(
                 facility.pop("services_pricelist_name"), "services"
-            )
+            ).id
+        else:
+            # if we want to remove pricelist through updating
+            facility["services_pricelist_id"] = None
         if "items_pricelist_name" in facility:
             facility["items_pricelist_id"] = get_pricelist(
                 facility.pop("items_pricelist_name"), "items"
-            )
+            ).id
+        else:
+            facility["items_pricelist_id"] = None
 
         try:
             if strategy == STRATEGY_INSERT:
