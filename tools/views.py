@@ -49,7 +49,7 @@ def checkUserWithRights(rights):
 )
 @renderer_classes([serializers.LocationsXMLRenderer])
 def download_locations(request):
-    data = {"Regions": [], "Districts": [], "Villages": [], "Municipalities": []}
+    data = {"Regions": [], "Districts": [], "Municipalities": [], "Villages": []}
 
     for region in Location.objects.filter(~Q(code="FR"), type="R", *filter_validity()):
         data["Regions"].append(serializers.format_location(region))
