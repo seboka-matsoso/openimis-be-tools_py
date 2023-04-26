@@ -375,6 +375,7 @@ def upload_services(request):
         )
 
 
+@api_view(["GET"])
 def download_master_data(request):
     if not request.user.has_perms(ToolsConfig.extracts_master_data_perms):
         raise PermissionDenied(_("unauthorized"))
@@ -390,6 +391,7 @@ def download_master_data(request):
     return response
 
 
+@api_view(["GET"])
 def download_phone_extract(request):
     if not request.user.has_perms(ToolsConfig.extracts_phone_extract_perms):
         raise PermissionDenied(_("unauthorized"))
@@ -409,12 +411,13 @@ def download_phone_extract(request):
     )
 
 
+@api_view(["GET"])
 def download_feedbacks(request):
     if not request.user.has_perms(ToolsConfig.extracts_officer_feedbacks_perms):
         raise PermissionDenied(_("unauthorized"))
 
-    officer_code = request.GET.get("officer")
-    officer = get_object_or_404(Officer, code__iexact=officer_code, *filter_validity())
+    officer_code = request.GET.get("officer_code")
+    officer = get_object_or_404(Officer, id=officer_code, *filter_validity())
 
     export_file = services.create_officer_feedbacks_export(request.user, officer)
 
@@ -427,13 +430,13 @@ def download_feedbacks(request):
 
     return response
 
-
+@api_view(["GET"])
 def download_renewals(request):
     if not request.user.has_perms(ToolsConfig.extracts_officer_renewals_perms):
         raise PermissionDenied(_("unauthorized"))
 
     officer_code = request.GET.get("officer")
-    officer = get_object_or_404(Officer, code__iexact=officer_code, *filter_validity())
+    officer = get_object_or_404(Officer, id=officer_code, *filter_validity())
 
     export_file = services.create_officer_renewals_export(request.user, officer)
     response = FileResponse(
