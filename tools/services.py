@@ -892,7 +892,7 @@ def upload_health_facilities(user, xml, strategy=STRATEGY_INSERT, dry_run=False)
             result.errors.append(f"Health facility '{facility['code']}' does not exist")
             continue
 
-        facility["location"] = get_parent_location(facility.pop("district_code"))
+        facility["location"] = get_parent_location(facility.get("district_code", None))
         if not facility["location"]:
             result.errors.append(
                 f"Location '{facility['district_code']}'' does not exist"

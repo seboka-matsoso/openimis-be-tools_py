@@ -160,6 +160,15 @@ def upload_health_facilities(request):
                 "error": "Malformed XML",
             }
         )
+    except Exception as exc:
+        logger.error(exc)
+        return Response(
+            {
+                "success": False,
+                "error": str(exc),
+            }
+        )
+
 
 
 @api_view(["GET"])
