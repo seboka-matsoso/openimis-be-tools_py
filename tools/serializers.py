@@ -8,10 +8,17 @@ from rest_framework_xml.renderers import XMLRenderer
 
 from rest_framework import serializers
 
+from core.utils import PATIENT_CATEGORY_MASK_ADULT, PATIENT_CATEGORY_MASK_MALE, PATIENT_CATEGORY_MASK_MINOR, \
+    PATIENT_CATEGORY_MASK_FEMALE
+from location.apps import DEFAULT_CFG as LOCATION_DEFAULT_CFG
 
-class UploadSerializer(serializers.Serializer):
-    dry_run = serializers.BooleanField()
+
+class FileSerializer(serializers.Serializer):
     file = serializers.FileField(required=True)
+
+
+class UploadSerializer(FileSerializer):
+    dry_run = serializers.BooleanField()
     strategy = serializers.ChoiceField(
         choices=(
             (STRATEGY_INSERT, "Insert only"),
@@ -99,6 +106,16 @@ class DiagnosesXMLRenderer(CustomXMLRenderer):
     item_tag_name = "Diagnosis"
 
 
+class ItemsXMLRenderer(CustomXMLRenderer):
+    root_tag_name = "Items"
+    item_tag_name = "Item"
+
+
+class ServicesXMLRenderer(CustomXMLRenderer):
+    root_tag_name = "Services"
+    item_tag_name = "Service"
+
+
 def format_location(location):
     if location.type == "R":
         return {"region": {"region_code": location.code, "region_name": location.name}}
@@ -110,7 +127,7 @@ def format_location(location):
                 "district_name": location.name,
             }
         }
-    elif location.type == "M":
+    elif location.type == LOCATION_DEFAULT_CFG['location_types'][2]:
         return {
             "municipality": {
                 "district_code": location.parent.code,
@@ -134,3 +151,55 @@ def format_location(location):
 
 def format_diagnosis(diagnosis):
     return {"diagnosis_code": diagnosis.code, "diagnosis_name": diagnosis.name}
+
+
+def format_items(item):
+    """
+    Formats a medical.Item object for an XML export.
+    This function lists and formats all the medical.Item fields that will be exported.
+    """
+    pat_cat = item.patient_category
+    adult_cat = pat_cat & PATIENT_CATEGORY_MASK_ADULT
+    minor_cat = pat_cat & PATIENT_CATEGORY_MASK_MINOR
+    male_cat = pat_cat & PATIENT_CATEGORY_MASK_MALE
+    female_cat = pat_cat & PATIENT_CATEGORY_MASK_FEMALE
+    return {
+        "item_code": item.code,
+        "item_name": item.name,
+        "item_type": item.type,
+        "item_price": item.price,
+        "item_care_type": item.care_type,
+        "item_male_category": male_cat,
+        "item_female_category": female_cat if not female_cat else 1,
+        "item_adult_category": adult_cat if not adult_cat else 1,
+        "item_minor_category": minor_cat if not minor_cat else 1,
+        "item_package": item.package,
+        "item_quantity": item.quantity,
+        "item_frequency ": item.frequency,
+    }
+
+
+def format_services(service):
+    """
+    Formats a medical.Service object for an XML export.
+    This function lists and formats all the medical.Service fields that will be exported.
+    """
+    pat_cat = service.patient_category
+    adult_cat = pat_cat & PATIENT_CATEGORY_MASK_ADULT
+    minor_cat = pat_cat & PATIENT_CATEGORY_MASK_MINOR
+    male_cat = pat_cat & PATIENT_CATEGORY_MASK_MALE
+    female_cat = pat_cat & PATIENT_CATEGORY_MASK_FEMALE
+    return {
+        "service_code": service.code,
+        "service_name": service.name,
+        "service_type": service.type,
+        "service_level": service.level,
+        "service_price": service.price,
+        "service_care_type": service.care_type,
+        "service_male_category": male_cat,
+        "service_female_category": female_cat if not female_cat else 1,
+        "service_adult_category": adult_cat if not adult_cat else 1,
+        "service_minor_category": minor_cat if not minor_cat else 1,
+        "service_category": service.category,
+        "service_frequency": service.frequency,
+    }

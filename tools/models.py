@@ -44,5 +44,5 @@ class Extract(core_models.VersionedModel):
     stored_file = models.FileField(upload_to="extracts/%Y/%m/", db_column="ExtractFile")
 
     class Meta:
-        managed = False
+        managed = True
         db_table = "tblExtracts"

@@ -3,25 +3,28 @@ import os
 import tempfile
 import xml.etree.ElementTree as ET
 
-from django.core.files.storage import default_storage
-from rest_framework.exceptions import bad_request, APIException
-
 from core.models import Officer
 from core.utils import filter_validity
 from django.core.exceptions import PermissionDenied
 from django.db.models.query_utils import Q
+from django.http import HttpResponse
 from django.http.response import FileResponse, JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils.translation import gettext as _
 from django.views.decorators.http import require_http_methods
+from import_export.resources import ModelResource
+from tablib import Dataset
+
 from location.models import HealthFacility, Location
-from medical.models import Diagnosis
+from medical.models import Diagnosis, Item, Service
+from location.apps import DEFAULT_CFG as LOCATION_DEFAULT_CFG
 from rest_framework.decorators import api_view, permission_classes, renderer_classes
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from . import serializers, services, utils
 from .apps import ToolsConfig
+from .resources import ItemResource, ServiceResource
+from .services import return_upload_result_json
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +49,7 @@ def checkUserWithRights(rights):
 )
 @renderer_classes([serializers.LocationsXMLRenderer])
 def download_locations(request):
-    data = {"Regions": [], "Districts": [], "Villages": [], "Municipalities": []}
+    data = {"Regions": [], "Districts": [], "Municipalities": [], "Villages": []}
 
     for region in Location.objects.filter(~Q(code="FR"), type="R", *filter_validity()):
         data["Regions"].append(serializers.format_location(region))
@@ -54,7 +57,7 @@ def download_locations(request):
         for child in children:
             if child.type == "D":
                 data["Districts"].append(serializers.format_location(child))
-            elif child.type == "M":
+            elif child.type == LOCATION_DEFAULT_CFG['location_types'][2]:
                 data["Municipalities"].append(serializers.format_location(child))
             elif child.type == "V":
                 data["Villages"].append(serializers.format_location(child))
@@ -89,19 +92,7 @@ def upload_locations(request):
             request.user, xml=xml, strategy=strategy, dry_run=dry_run
         )
         logger.info(f"Locations upload completed: {result}")
-        return Response(
-            {
-                "success": True,
-                "data": {
-                    "sent": result.sent,
-                    "created": result.created,
-                    "updated": result.updated,
-                    "errors": result.errors,
-                },
-            }
-        )
-    except services.InvalidXMLError as exc:
-        return Response({"success": False, "error": str(exc)})
+        return return_upload_result_json(xml_result=result)
     except ET.ParseError as exc:
         logger.error(exc)
         return Response(
@@ -160,17 +151,7 @@ def upload_health_facilities(request):
             request.user, xml=xml, strategy=strategy, dry_run=dry_run
         )
         logger.info(f"Health facilities upload completed: {result}")
-        return Response(
-            {
-                "success": True,
-                "data": {
-                    "sent": result.sent,
-                    "created": result.created,
-                    "updated": result.updated,
-                    "errors": result.errors,
-                },
-            }
-        )
+        return return_upload_result_json(xml_result=result)
     except ET.ParseError as exc:
         logger.error(exc)
         return Response(
@@ -199,6 +180,59 @@ def download_diagnoses(request):
     )
 
 
+@api_view(["GET"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_items_perms,
+        )
+    ]
+)
+@renderer_classes([serializers.ItemsXMLRenderer])
+def download_items(request):
+    """Downloads all medical.Item objects in an XML file.
+
+    The list of exported fields can be modified in serializers.format_items().
+
+    Calling this function is restricted to some users, see ToolsConfig.
+
+    Parameters
+    ----------
+    request : rest_framework.request.Request
+        The request that is asking to download items.
+
+    Returns
+    ----------
+    rest_framework.response.Response
+        The requested data in an XML file.
+
+    """
+    queryset = Item.objects.filter(*filter_validity())
+    data = [serializers.format_items(item) for item in queryset]
+    return Response(
+        data=data,
+        headers={"Content-Disposition": "attachment; filename=items.xml"},
+    )
+
+
+@api_view(["GET"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_services_perms,
+        )
+    ]
+)
+@renderer_classes([serializers.ServicesXMLRenderer])
+def download_services(request):
+    queryset = Service.objects.filter(*filter_validity())
+    data = [serializers.format_services(service) for service in queryset]
+    return Response(
+        data=data,
+        headers={"Content-Disposition": "attachment; filename=services.xml"},
+    )
+
+
 @api_view(["POST"])
 @permission_classes(
     [
@@ -222,18 +256,7 @@ def upload_diagnoses(request):
             request.user, xml=xml, strategy=strategy, dry_run=dry_run
         )
         logger.info(f"Diagnoses upload completed: {result}")
-        return Response(
-            {
-                "success": True,
-                "data": {
-                    "sent": result.sent,
-                    "created": result.created,
-                    "updated": result.updated,
-                    "deleted": result.deleted,
-                    "errors": result.errors,
-                },
-            }
-        )
+        return return_upload_result_json(xml_result=result)
     except ET.ParseError as exc:
         logger.error(exc)
         return Response(
@@ -244,6 +267,115 @@ def upload_diagnoses(request):
         )
 
 
+@api_view(["POST"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_items_perms,
+        )
+    ]
+)
+def upload_items(request):
+    """Uploads an XML file containing medical.Item entries.
+
+    Calling this function is restricted to some users, see ToolsConfig.
+
+    Parameters
+    ----------
+    request : rest_framework.request.Request
+        The request containing all data.
+
+    Returns
+    ------
+    JsonResponse
+        Represents the number of entries received, with the number of created/updated/deleted
+        medical.Item objects, as well as the list of errors that have occurred while each entry was processed.
+
+    Raises
+    ------
+    ET.ParseError
+        If the structure of the XML file is invalid.
+    """
+    serializer = serializers.DeletableUploadSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    file = serializer.validated_data.get("file")
+    dry_run = serializer.validated_data.get("dry_run")
+    strategy = serializer.validated_data.get("strategy")
+
+    try:
+        logger.info("Uploading medical items (dry_run=%s, strategy=%s)...", dry_run, strategy)
+        xml = utils.sanitize_xml(file)
+        result = services.upload_items(
+            request.user, xml=xml, strategy=strategy, dry_run=dry_run
+        )
+        logger.info("Medical items upload completed: %s", result)
+        return return_upload_result_json(xml_result=result)
+    except ET.ParseError as exc:
+        logger.error(exc)
+        return Response(
+            {
+                "success": False,
+                "error": "Malformed XML",
+            }
+        )
+
+
+@api_view(["POST"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_services_perms,
+        )
+    ]
+)
+def upload_services(request):
+    """Uploads an XML file containing medical.Service entries.
+
+    Calling this function is restricted to some users, see ToolsConfig.
+
+    Parameters
+    ----------
+    request : rest_framework.request.Request
+        The request containing all data.
+
+    Returns
+    ------
+    JsonResponse
+        Represents the number of entries received, with the number of created/updated/deleted
+        medical.Service objects, as well as the list of errors that have occurred while each entry was processed.
+
+    Raises
+    ------
+    ET.ParseError
+        If the structure of the XML file is invalid.
+    """
+    serializer = serializers.DeletableUploadSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    file = serializer.validated_data.get("file")
+    dry_run = serializer.validated_data.get("dry_run")
+    strategy = serializer.validated_data.get("strategy")
+
+    try:
+        logger.info("Uploading medical services (dry_run=%s, strategy=%s)...", dry_run, strategy)
+        xml = utils.sanitize_xml(file)
+        result = services.upload_services(
+            request.user, xml=xml, strategy=strategy, dry_run=dry_run
+        )
+        logger.info("Medical services upload completed: %s", result)
+        return return_upload_result_json(xml_result=result)
+    except ET.ParseError as exc:
+        logger.error(exc)
+        return Response(
+            {
+                "success": False,
+                "error": "Malformed XML",
+            }
+        )
+
+
+@api_view(["GET"])
 def download_master_data(request):
     if not request.user.has_perms(ToolsConfig.extracts_master_data_perms):
         raise PermissionDenied(_("unauthorized"))
@@ -259,6 +391,7 @@ def download_master_data(request):
     return response
 
 
+@api_view(["GET"])
 def download_phone_extract(request):
     if not request.user.has_perms(ToolsConfig.extracts_phone_extract_perms):
         raise PermissionDenied(_("unauthorized"))
@@ -278,12 +411,13 @@ def download_phone_extract(request):
     )
 
 
+@api_view(["GET"])
 def download_feedbacks(request):
     if not request.user.has_perms(ToolsConfig.extracts_officer_feedbacks_perms):
         raise PermissionDenied(_("unauthorized"))
 
-    officer_code = request.GET.get("officer")
-    officer = get_object_or_404(Officer, code__iexact=officer_code, *filter_validity())
+    officer_id = request.GET.get("officer_id")
+    officer = get_object_or_404(Officer, id=officer_id, *filter_validity())
 
     export_file = services.create_officer_feedbacks_export(request.user, officer)
 
@@ -296,13 +430,13 @@ def download_feedbacks(request):
 
     return response
 
-
+@api_view(["GET"])
 def download_renewals(request):
     if not request.user.has_perms(ToolsConfig.extracts_officer_renewals_perms):
         raise PermissionDenied(_("unauthorized"))
 
-    officer_code = request.GET.get("officer")
-    officer = get_object_or_404(Officer, code__iexact=officer_code, *filter_validity())
+    officer_id = request.GET.get("officer_id")
+    officer = get_object_or_404(Officer, id=officer_id, *filter_validity())
 
     export_file = services.create_officer_renewals_export(request.user, officer)
     response = FileResponse(
@@ -413,3 +547,163 @@ def _process_upload(request, process_method):
             return JsonResponse({"error": str(exc)}, status=500)
 
     return JsonResponse({"success": len(errors) == 0, "errors": errors})
+
+
+# List of supported import/export formats so far
+XLS = "xls"
+XLSX = "xlsx"
+CSV = "csv"
+JSON = "json"
+SUPPORTED_FORMATS = [XLS, XLSX, CSV, JSON]
+
+# other types: https://stackoverflow.com/a/50860387
+CONTENT_TYPES = {
+    XLS: "application/vnd.ms-excel",
+    CSV: "text/csv",
+    JSON: "application/json",
+    XLSX: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
+
+@api_view(["GET"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_items_perms,
+        )
+    ]
+)
+def export_items(request):
+    export_format = request.GET.get("file_format", "unknown")
+    if export_format in SUPPORTED_FORMATS:
+        return process_export_items(request.user.id_for_audit, export_format)
+    else:
+        return JsonResponse({"error": "Unknown export format."}, status=400)
+
+
+def process_export_items(user_id, data_type):
+    logger.info("User (audit id %s) requested export of medical items in %s", user_id, data_type)
+    item_resource = ItemResource(user_id)
+    query_set = Item.objects.filter(*filter_validity()).order_by("code")
+    dataset = item_resource.export(query_set)
+    datasets = {
+        XLS: dataset.xls,
+        CSV: dataset.csv,
+        JSON: dataset.json,
+        XLSX: dataset.xlsx,
+    }
+    response = HttpResponse(datasets[data_type], content_type=CONTENT_TYPES[data_type])
+    response['Content-Disposition'] = f'attachment; filename="items.{data_type}"'
+    return response
+
+
+@api_view(["POST"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_items_perms,
+        )
+    ]
+)
+def import_items(request):
+    serializer = serializers.FileSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    file = serializer.validated_data.get("file")
+    user_id = request.user.id_for_audit
+    logger.info("User (audit id %s) requested import of medical items", user_id)
+
+    item_resource = ItemResource(user_id)
+    dataset = Dataset()
+
+    if CONTENT_TYPES[CSV] == file.content_type:
+        dataset.load(file.read().decode(), format="csv")  # the CSV file must be read differently, otherwise it crashes
+    else:
+        dataset.load(file.read())
+
+    return process_import_items_services(item_resource, dataset)
+
+
+@api_view(["GET"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_services_perms,
+        )
+    ]
+)
+def export_services(request):
+    export_format = request.GET.get("file_format", "unknown")
+    if export_format in SUPPORTED_FORMATS:
+        return process_export_services(request.user.id_for_audit, export_format)
+    else:
+        return JsonResponse({"error": "Unknown export format."}, status=400)
+
+
+def process_export_services(user_id, data_type):
+    logger.info("User (audit id %s) requested export of medical services in %s", user_id, data_type)
+    service_resource = ServiceResource(user_id)
+    query_set = Service.objects.filter(*filter_validity()).order_by("code")
+    dataset = service_resource.export(query_set)
+    datasets = {
+        XLS: dataset.xls,
+        CSV: dataset.csv,
+        JSON: dataset.json,
+        XLSX: dataset.xlsx,
+    }
+    response = HttpResponse(datasets[data_type], content_type=CONTENT_TYPES[data_type])
+    response['Content-Disposition'] = f'attachment; filename="services.{data_type}"'
+    return response
+
+
+@api_view(["POST"])
+@permission_classes(
+    [
+        checkUserWithRights(
+            ToolsConfig.registers_services_perms,
+        )
+    ]
+)
+def import_services(request):
+    serializer = serializers.FileSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+
+    file = serializer.validated_data.get("file")
+    user_id = request.user.id_for_audit
+    logger.info("User (audit id %s) requested import of medical services", user_id)
+
+    service_resource = ServiceResource(user_id)
+    dataset = Dataset()
+
+    if CONTENT_TYPES[CSV] == file.content_type:
+        dataset.load(file.read().decode(), format="csv")  # the CSV file must be read differently, otherwise it crashes
+    else:
+        dataset.load(file.read())
+
+    return process_import_items_services(service_resource, dataset)
+
+
+def process_import_items_services(resource: ModelResource, dataset: Dataset):
+    result = resource.import_data(dataset, dry_run=True)  # Test the data import
+
+    success = True
+    errors = []
+    logger.info("Import results: total rows received=%s - detail=%s", result.total_rows, result.totals)
+
+    if not result.has_errors() and not result.has_validation_errors():
+        resource.import_data(dataset, dry_run=False)  # Actually import now
+    else:
+        success = False
+        if result.has_validation_errors():
+            for invalid_row in result.invalid_rows:
+                logger.error("Invalid row n°%s - %s", invalid_row.number, invalid_row.error.message)
+                errors.append(f"row ({invalid_row.number}) - {invalid_row.error.message}")
+        if result.has_errors():
+            for index, row_error in result.row_errors():
+                logger.error("Error row n°%s", index)
+                for error in row_error:
+                    logger.error("Traceback: %s", error.traceback)
+                    errors.append(f"row ({index}) - {error.error}")
+
+    logger.info("End of import process")
+    return return_upload_result_json(success=success, other_types_result=result, other_types_errors=errors)

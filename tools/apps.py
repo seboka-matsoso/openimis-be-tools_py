@@ -6,6 +6,8 @@ DEFAULT_CFG = {
     "registers_diagnoses_perms": ["131000", "131002", "131001"],
     "registers_health_facilities_perms": ["131000", "131004", "131003"],
     "registers_locations_perms": ["131000", "131006", "131005"],
+    "registers_items_perms": ["131000", "131008", "131007"],
+    "registers_services_perms": ["131000", "131010", "131009"],
     "extracts_master_data_perms": [],
     "extracts_officer_feedbacks_perms": [],
     "extracts_officer_renewals_perms": [],
@@ -22,6 +24,8 @@ class ToolsConfig(AppConfig):
     registers_diagnoses_perms = []
     registers_health_facilities_perms = []
     registers_locations_perms = []
+    registers_items_perms = []
+    registers_services_perms = []
 
     extracts_master_data_perms = []
     extracts_officer_feedbacks_perms = []
@@ -37,6 +41,8 @@ class ToolsConfig(AppConfig):
         ToolsConfig.registers_health_facilities_perms = cfg[
             "registers_health_facilities_perms"
         ]
+        ToolsConfig.registers_items_perms = cfg["registers_items_perms"]
+        ToolsConfig.registers_services_perms = cfg["registers_services_perms"]
         ToolsConfig.registers_locations_perms = cfg["registers_locations_perms"]
         ToolsConfig.extracts_master_data_perms = cfg["extracts_master_data_perms"]
         ToolsConfig.extracts_phone_extract_perms = cfg["extracts_phone_extract_perms"]
