@@ -20,6 +20,7 @@ DEFAULT_CFG = {
 
 
 class ToolsConfig(AppConfig):
+    name = MODULE_NAME
     registers_perms = []
     registers_diagnoses_perms = []
     registers_health_facilities_perms = []
