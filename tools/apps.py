@@ -1,6 +1,8 @@
 from django.apps import AppConfig
 from django.conf import settings
 
+MODULE_NAME = "tools"
+
 DEFAULT_CFG = {
     "registers_perms": ["131000"],
     "registers_diagnoses_perms": ["131000", "131002", "131001"],
@@ -18,8 +20,6 @@ DEFAULT_CFG = {
 
 
 class ToolsConfig(AppConfig):
-    name = "tools"
-
     registers_perms = []
     registers_diagnoses_perms = []
     registers_health_facilities_perms = []
@@ -35,33 +35,16 @@ class ToolsConfig(AppConfig):
 
     master_data_password = None
 
-    def _configure_permissions(self, cfg):
-        ToolsConfig.registers_perms = cfg["registers_perms"]
-        ToolsConfig.registers_diagnoses_perms = cfg["registers_diagnoses_perms"]
-        ToolsConfig.registers_health_facilities_perms = cfg[
-            "registers_health_facilities_perms"
-        ]
-        ToolsConfig.registers_items_perms = cfg["registers_items_perms"]
-        ToolsConfig.registers_services_perms = cfg["registers_services_perms"]
-        ToolsConfig.registers_locations_perms = cfg["registers_locations_perms"]
-        ToolsConfig.extracts_master_data_perms = cfg["extracts_master_data_perms"]
-        ToolsConfig.extracts_phone_extract_perms = cfg["extracts_phone_extract_perms"]
-        ToolsConfig.extracts_upload_claims_perms = cfg["extracts_upload_claims_perms"]
-
-        ToolsConfig.extracts_officer_feedbacks_perms = cfg[
-            "extracts_officer_feedbacks_perms"
-        ]
-        ToolsConfig.extracts_officer_renewals_perms = cfg[
-            "extracts_officer_renewals_perms"
-        ]
+    def __load_config(self, cfg):
+        for field in cfg:
+            if hasattr(ToolsConfig, field):
+                setattr(ToolsConfig, field, cfg[field])
 
     def ready(self):
         from core.models import ModuleConfiguration
 
-        cfg = ModuleConfiguration.get_or_default("tools", DEFAULT_CFG)
-        self._configure_permissions(cfg)
-
-        ToolsConfig.master_data_password = cfg["master_data_password"]
+        cfg = ModuleConfiguration.get_or_default(MODULE_NAME, DEFAULT_CFG)
+        self.__load_config(cfg)
 
     @classmethod
     def get_master_data_password(cls):
