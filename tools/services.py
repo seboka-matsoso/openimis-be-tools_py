@@ -1059,7 +1059,7 @@ def create_officer_feedbacks_export(user, officer):
 
 def create_officer_renewals_export(user, officer):
     from policy.models import PolicyRenewal
-
+    format_date = '%d-%m-%Y'
     renewals = PolicyRenewal.objects.filter(
         new_officer=officer, *filter_validity()
     ).select_related(
@@ -1081,12 +1081,12 @@ def create_officer_renewals_export(user, officer):
                 "CHFID": renewal.insuree.chf_id,
                 "LastName": renewal.insuree.last_name,
                 "OtherNames": renewal.insuree.other_names,
-                "ProductCode": renewal.product.code,
-                "ProductName": renewal.product.name,
-                "ProdId": renewal.product_id,
+                "ProductCode": renewal.new_product.code,
+                "ProductName": renewal.new_product.name,
+                "ProdId": renewal.new_product.id,
                 "VillageName": renewal.insuree.family.location.name,
                 "FamilyId": renewal.insuree.family_id,
-                "EnrollDate": renewal.renewal_date,
+                "EnrollDate": renewal.renewal_date.strftime(format_date),
                 "PolicyStage": "R",
                 "PolicyValue": renewal.policy.value,
             }
