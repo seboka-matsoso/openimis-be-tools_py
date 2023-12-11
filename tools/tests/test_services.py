@@ -6,7 +6,20 @@ from unittest import mock
 from tools.services import upload_claim, InvalidXMLError, get_xml_element, get_xml_element_int,\
     InvalidXmlInt, create_officer_feedbacks_export, create_officer_renewals_export
 from xml.etree import ElementTree
+from datetime import date, datetime, time, timedelta
+
 from core.models import Officer
+from core.utils import filter_validity
+from location.models import Location
+from policy.services import insert_renewals
+from claim.models import Claim
+from claim.test_helpers import (
+    create_test_claim,
+    create_test_claimservice,
+    create_test_claimitem,
+    delete_claim_with_itemsvc_dedrem_and_history,
+)
+from claim.gql_mutations import create_feedback_prompt
 
 class UploadClaimsTestCase(TestCase):
     def test_upload_claims_unknown_hf(self):
@@ -66,14 +79,29 @@ class GetXmlElement(TestCase):
 class register(TestCase):
     test_officer = None
     test_user = None
+    claim = None
     @classmethod
     def setUpTestData(cls):
-        cls.test_officer = Officer.objects.all().first()
+        
+        cls.claim = create_test_claim(custom_props={'status': Claim.STATUS_CHECKED, 'feedback_status': Claim.FEEDBACK_SELECTED})
+        
+        cls.test_officer = Officer.objects.filter(officer_villages__location = cls.claim.insuree.family.location).first()
+        insert_renewals(
+            date_from= date.today() + timedelta(days=-3650), 
+            date_to=date.today()+ timedelta(days=7300), 
+            officer_id=cls.test_officer.id, 
+            reminding_interval=365, 
+            location_id=cls.claim.insuree.family.location.id, 
+            location_levels=4)
         
     def test_generating_feedback(self):
+        class DummyUser:
+            id_for_audit = -1
         mock_user = mock.Mock(is_anonymous=False)
         mock_user.has_perm = mock.MagicMock(return_value=True)
         mock_user.is_imis_admin = mock.MagicMock(return_value=False)
+        
+        create_feedback_prompt(self.claim.uuid, user=DummyUser())
         zip = create_officer_feedbacks_export(mock_user, self.test_officer)
         self.assertNotEqual(zip, None)
         
