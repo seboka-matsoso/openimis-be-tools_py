@@ -53,7 +53,7 @@ def download_locations(request):
 
     for region in Location.objects.filter(~Q(code="FR"), type="R", *filter_validity()):
         data["Regions"].append(serializers.format_location(region))
-        children = Location.objects.children(region.id).filter(validity_to=None)
+        children = Location.objects.children(region.id)
         for child in children:
             if child.type == "D":
                 data["Districts"].append(serializers.format_location(child))
@@ -160,6 +160,15 @@ def upload_health_facilities(request):
                 "error": "Malformed XML",
             }
         )
+    except Exception as exc:
+        logger.error(exc)
+        return Response(
+            {
+                "success": False,
+                "error": str(exc),
+            }
+        )
+
 
 
 @api_view(["GET"])

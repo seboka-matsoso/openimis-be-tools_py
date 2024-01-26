@@ -14,7 +14,7 @@ from itertools import chain
 
 from contribution.models import Premium
 from core.utils import filter_validity
-from django.db.models import Manager
+from django.db.models import Manager, Prefetch
 from django.db.models.query_utils import Q
 from django.http import JsonResponse
 from import_export.results import Result
@@ -29,9 +29,9 @@ from datetime import datetime
 
 from insuree.models import Family, Insuree, InsureePolicy
 from medical.models import Diagnosis, Item, Service, ItemOrService
-from location.models import Location, HealthFacility, UserDistrict
+from location.models import Location, HealthFacility, LocationManager
 from medical_pricelist.models import ServicesPricelist, ItemsPricelist
-from claim.models import ClaimAdmin, Claim, Feedback
+from claim.models import ClaimAdmin, Claim, Feedback, FeedbackPrompt
 from policy.models import Policy
 from policy.services import update_insuree_policies
 from .utils import dictfetchall, sanitize_xml, dmy_format_sql
@@ -45,6 +45,7 @@ import zipfile
 import sqlite3
 import os
 from xml.etree import ElementTree
+
 
 logger = logging.getLogger(__name__)
 
@@ -347,7 +348,7 @@ def parse_xml_services(xml):
     If some data do not match these constraints, if a mandatory field is missing or if there is any error
     while the data is being parsed, an error message is added and the currently parsed service is discarded.
 
-    Parameters
+    ParametersFeedbackPrompt
     ----------
     xml : xml.etree.ElementTree.ElementTree
         The parsed XML file.
@@ -892,7 +893,7 @@ def upload_health_facilities(user, xml, strategy=STRATEGY_INSERT, dry_run=False)
             result.errors.append(f"Health facility '{facility['code']}' does not exist")
             continue
 
-        facility["location"] = get_parent_location(facility.pop("district_code"))
+        facility["location"] = get_parent_location(facility.get("district_code", None))
         if not facility["location"]:
             result.errors.append(
                 f"Location '{facility['district_code']}'' does not exist"
@@ -1012,26 +1013,30 @@ def create_officer_feedbacks_export(user, officer):
     AND C.FeedbackStatus = 4"
 
     """
-
-    with connection.cursor() as cursor:
-        results = dictfetchall(
-            cursor.execute(
-                f"""
-            SELECT F."ClaimID",F."OfficerID",O."Code" OfficerCode, I."CHFID", I."LastName", I."OtherNames",
-                HF."HFCode", HF."HFName",C."ClaimCode",{dmy_format_sql(connection.vendor, 'C."DateFrom"')} DateFrom, 
-                CONVERT(NVARCHAR(10),C.DateTo,103)DateTo,O."Phone", {dmy_format_sql(connection.vendor, 'F.FeedbackPromptDate')} FeedbackPromptDate
-                FROM "tblFeedbackPrompt" F 
-                INNER JOIN "tblOfficer" O ON F."OfficerID" = O."OfficerID"
-                INNER JOIN "tblClaim" C ON F."ClaimID" = C."ClaimID" 
-                INNER JOIN "tblInsuree" I ON C."InsureeID" = I."InsureeID" 
-                INNER JOIN "tblHF" HF ON C."HFID" = HF."HfID" 
-                WHERE F."ValidityTo" Is NULL AND O."ValidityTo" IS NULL 
-                AND F."OfficerId" = %s 
-                AND C."FeedbackStatus" = 4
-        """,
-                (officer.id,),
-            )
-        )
+    
+    prompts = FeedbackPrompt.objects.filter(*filter_validity())\
+        .filter(officer_id = officer.id, claim__feedback_status = Claim.FEEDBACK_SELECTED )\
+        .select_related('claim',
+        'claim__insuree',
+        'claim__health_facility')
+    results = []
+    format_date = '%d-%m-%Y'
+    for p in prompts:
+        results.append({
+            "ClaimID" : p.claim_id,
+            "OfficerID": officer.id,
+            "OfficerCode": officer.code,
+            "CHFID": p.claim.insuree.chf_id,
+            "LastName": p.claim.insuree.last_name,
+            "OtherNames": p.claim.insuree.other_names,
+            "HFCode": p.claim.health_facility.code,
+            "HFName": p.claim.health_facility.name,
+            "ClaimCode": p.claim.code,
+            "DateFrom": p.claim.date_from.strftime(format_date),
+            "DateTo":  p.claim.date_to.strftime(format_date),
+            "Phone":  officer.phone,
+            "FeedbackPromptDate": p.feedback_prompt_date.strftime(format_date)
+        })
 
     with tempfile.TemporaryDirectory() as tmp_dir_name:
         file_name = f"feedbaks_{officer.code}.txt"
@@ -1054,19 +1059,14 @@ def create_officer_feedbacks_export(user, officer):
 
 def create_officer_renewals_export(user, officer):
     from policy.models import PolicyRenewal
-
+    format_date = '%d-%m-%Y'
     renewals = PolicyRenewal.objects.filter(
         new_officer=officer, *filter_validity()
-    ).prefetch_related(
-        "policy__value",
-        "new_officer__code",
-        "new_product__name",
-        "new_product__code",
-        "insuree__chf_id",
-        "insuree__last_name",
-        "insuree__other_names",
+    ).select_related(
+        "policy",
+        "insuree",
         "insuree__family",
-        "insuree__family__location__name",
+        "insuree__family__location",
     )
 
     results = []
@@ -1076,17 +1076,17 @@ def create_officer_renewals_export(user, officer):
             {
                 "RenewalId": renewal.id,
                 "PolicyId": renewal.policy_id,
-                "OfficerId": renewal.new_officer_id,
-                "OfficerCode": renewal.new_officer.code,
+                "OfficerId": officer.id,
+                "OfficerCode": officer.code,
                 "CHFID": renewal.insuree.chf_id,
                 "LastName": renewal.insuree.last_name,
                 "OtherNames": renewal.insuree.other_names,
-                "ProductCode": renewal.product.code,
-                "ProductName": renewal.product.name,
-                "ProdId": renewal.product_id,
+                "ProductCode": renewal.new_product.code,
+                "ProductName": renewal.new_product.name,
+                "ProdId": renewal.new_product.id,
                 "VillageName": renewal.insuree.family.location.name,
                 "FamilyId": renewal.insuree.family_id,
-                "EnrollDate": renewal.renewal_date,
+                "EnrollDate": renewal.renewal_date.strftime(format_date),
                 "PolicyStage": "R",
                 "PolicyValue": renewal.policy.value,
             }
@@ -1248,15 +1248,11 @@ def create_phone_extract(user, location_id, with_insuree=False):
 def upload_claim(user, xml):
     logger.info(f"Uploading claim with user {user.id}")
 
-    if settings.ROW_SECURITY:
+    if settings.ROW_SECURITY :
         logger.info("Check that user can upload claims in claims' health facilities")
-        districts = UserDistrict.get_user_districts(user._u)
         hf_code = xml.find("Claim").find("Details").find("HFCode").text
-        if not (
-                HealthFacility.filter_queryset()
-                        .filter(location_id__in=[l.location_id for l in districts], code=hf_code)
-                        .exists()
-        ):
+        hfs = LocationManager().build_user_location_filter_query(user._u, queryset = HealthFacility.filter_queryset().filter(code=hf_code), loc_types = ['D'])
+        if len(hfs)<1:
             raise InvalidXMLError(
                 f"User cannot upload claims for health facility {hf_code}"
             )
