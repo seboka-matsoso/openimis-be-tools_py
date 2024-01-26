@@ -59,9 +59,12 @@ class ToolsConfig(AppConfig):
         from core.models import ModuleConfiguration
 
         cfg = ModuleConfiguration.get_or_default("tools", DEFAULT_CFG)
+        for key, value in cfg.items():
+            print(f"{key}: {value}")
         self._configure_permissions(cfg)
 
         ToolsConfig.master_data_password = cfg["master_data_password"]
+        print(ToolsConfig.master_data_password)
 
     @classmethod
     def get_master_data_password(cls):
